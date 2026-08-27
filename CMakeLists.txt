@@ -21,6 +21,8 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE} " - Version: " ${VERSION} " / 
 option(USE_SIMD_OPTIMIZATIONS "enable SIMD optimizations" ON)
 option(SDDC_ENABLE_IPO "enable interprocedural optimization in Release builds" ON)
 option(SDDC_BUILD_SOAPY_BENCHMARK "build the standalone SoapySDR RX benchmark" OFF)
+set(SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR "" CACHE PATH
+    "SDR++.app Contents/Frameworks directory used for macOS runtime linkage")
 
 # allow enabling address sanitizer - for debug reasons
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -102,6 +104,27 @@ else()
     include(FindPkgConfig)
     pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
     pkg_check_modules(LIBFFTW REQUIRED fftw3f)
+
+    if(APPLE AND SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR)
+        foreach(SDDC_BUNDLE_LIBRARY
+                libSoapySDR.0.8.dylib
+                libfftw3f.3.dylib
+                libusb-1.0.0.dylib)
+            if(NOT EXISTS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/${SDDC_BUNDLE_LIBRARY}")
+                message(FATAL_ERROR
+                    "Missing SDR++ bundle library: ${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/${SDDC_BUNDLE_LIBRARY}")
+            endif()
+        endforeach()
+
+        # Keep pkg-config's development headers, but link against the exact
+        # libraries shipped inside the target SDR++.app.
+        set(LIBUSB_LIBRARY_DIRS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}")
+        set(LIBUSB_LIBRARIES
+            "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/libusb-1.0.0.dylib")
+        set(LIBFFTW_LIBRARY_DIRS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}")
+        set(LIBFFTW_LIBRARIES
+            "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/libfftw3f.3.dylib")
+    endif()
 endif (MSVC)
 
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_DEBUG")

@@ -136,3 +136,21 @@ The benchmark reports actual sample rate, wall and process CPU time, samples per
 ## Stop boundary
 
 Do not begin NEON intrinsics, Accelerate/vDSP, alternate FFTW builds, IPO/LTO changes, QoS, affinity, or Apple-specific thread tuning until the standalone benchmark is run with an attached RX888 MkII and this common-code baseline is recorded.
+
+## SDR++ bundle linkage
+
+The standalone benchmark build intentionally uses development libraries found
+by Homebrew. A module installed in `SDR++.app` must not introduce a second
+SoapySDR, FFTW, or libusb runtime into the process.
+
+Build against the libraries shipped in the target app bundle:
+
+```sh
+./scripts/build_macos_arm64_sdrpp_bundle.sh /Applications/SDR++.app
+```
+
+The module is staged under
+`artifacts/macos-arm64/sdrpp-bundle/lib/SoapySDR/modules0.8/`. Its external
+dependencies use `@rpath`, with `LC_RPATH` set to
+`@loader_path/../../Frameworks`, so installation under
+`Contents/SoapySDR/modules0.8` resolves only against the app's bundled runtime.
