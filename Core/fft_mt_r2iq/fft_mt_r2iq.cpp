@@ -112,8 +112,13 @@ float fft_mt_r2iq::setFreqOffset(float offset)
 	if(offset > 1) offset = 1;
 	if(offset < 0) offset = 0;
 
-	// Round to nearest multiple of 4 bins for better performance with SIMD operations
-	this->center_frequency_bin = int(offset * BASE_FFT_HALF_SIZE / 4) * 4;
+	// The bin must satisfy both the 4-bin SIMD alignment and phase continuity
+	// across the 4/5-FFT input advance. Their least common multiple is 20.
+	constexpr int tuning_bin_alignment = 20;
+	this->center_frequency_bin = static_cast<int>(
+		(offset * BASE_FFT_HALF_SIZE + tuning_bin_alignment / 2) /
+		tuning_bin_alignment) * tuning_bin_alignment;
+	this->center_frequency_bin = std::min(this->center_frequency_bin, BASE_FFT_HALF_SIZE);
 
 	float delta = ((float)this->center_frequency_bin / BASE_FFT_HALF_SIZE) - offset;
 	float ret = delta * getRatio(); // ret increases with higher decimation
@@ -173,10 +178,11 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 	this->GainScale = gain;
 	DebugPrintln(TAG, "Hardware gain : %.12f", this->GainScale);
 
-	// number of ffts needed to process one full buffer block
-	// including an overlap with the previous samples (required by the overlap-save method)
-	// Historically there was a "+ 1" here, but it triggers a rather catastrophic memory leak
-	ffts_per_blocks = inputbuffer_block_size / (BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE)+1;
+	// Each FFT consumes one non-overlapping advance from the current input block;
+	// the required history is prepended separately in fft_mt_r2iq_impl.h.
+	const int fft_input_advance = BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE;
+	assert(inputbuffer_block_size % fft_input_advance == 0);
+	ffts_per_blocks = inputbuffer_block_size / fft_input_advance;
 	DebugPrintln(TAG, "Number of FFTs per blocks : %d", ffts_per_blocks);
 	DebugPrintln(TAG, "Effective FFT conversion : %d", ffts_per_blocks * (BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE));
 

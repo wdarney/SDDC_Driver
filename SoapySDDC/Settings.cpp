@@ -1,8 +1,11 @@
 #include "SoapySDDC.hpp"
 
 #include <sys/types.h>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <SoapySDR/Types.hpp>
 #include <SoapySDR/Time.hpp>
 
@@ -10,6 +13,18 @@ using namespace std;
 
 
 const char TAG[] = "SoapySDDC_Settings";
+
+namespace {
+constexpr double RX888_MKII_MAX_VHF_RATE = 8000000.0;
+constexpr std::array<double, 6> RX888_MKII_SAMPLE_RATES = {
+    1000000.0, 2000000.0, 4000000.0,
+    8000000.0, 16000000.0, 32000000.0
+};
+constexpr std::array<uint32_t, 6> RX888_MKII_ADC_RATES = {
+    32000000, 32000000, 32000000, 32000000, 64000000, 64000000
+};
+constexpr std::array<uint8_t, 6> RX888_MKII_DECIMATIONS = {4, 3, 2, 1, 1, 0};
+}
 
 static void _Callback(void *context, const sddc_complex_t *data, uint32_t len)
 {
@@ -357,24 +372,80 @@ SoapySDR::ArgInfoList SoapySDDC::getFrequencyArgsInfo(const int, const size_t) c
 void SoapySDDC::setSampleRate(const int, const size_t, const double rate)
 {
     TracePrintln(TAG, "*, *, %f", rate);
-    
-    radio_handler->SetADCSampleRate(rate*2);
+
+    if (radio_handler->getHardwareModel() != RX888r2)
+    {
+        radio_handler->SetADCSampleRate(rate * 2);
+        configuredSampleRate = radio_handler->GetADCSampleRate() / 2.0;
+        return;
+    }
+
+    if (radio_handler->GetRFMode() == VHFMODE && rate > RX888_MKII_MAX_VHF_RATE)
+        throw std::runtime_error("RX888 MkII VHF mode supports at most 8 MHz without IF aliasing");
+
+    int rate_index = -1;
+    for (size_t i = 0; i < RX888_MKII_SAMPLE_RATES.size(); ++i)
+    {
+        if (std::abs(rate - RX888_MKII_SAMPLE_RATES[i]) < 1.0)
+        {
+            rate_index = static_cast<int>(i);
+            break;
+        }
+    }
+    if (rate_index < 0)
+        throw std::runtime_error("Unsupported RX888 MkII sample rate; use 1, 2, 4, 8, 16, or 32 MHz");
+
+    const uint32_t adc_rate = RX888_MKII_ADC_RATES[rate_index];
+    const uint8_t decimation = RX888_MKII_DECIMATIONS[rate_index];
+    sddc_err_t result = radio_handler->SetADCSampleRate(adc_rate);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to set RX888 MkII ADC rate");
+
+    result = radio_handler->SetDecimation(decimation);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to configure RX888 MkII R2IQ decimation");
+
+    // setFreqOffset() is normalized to both the ADC rate and decimation.
+    // Recalculate it when applications set frequency before sample rate.
+    if (centerFrequency != 0)
+    {
+        result = radio_handler->SetCenterFrequency(static_cast<uint32_t>(centerFrequency));
+        if (result != ERR_SUCCESS)
+            throw std::runtime_error("Failed to restore RX888 MkII tuning after sample-rate change");
+    }
+
+    configuredSampleRate = rate;
+    DebugPrintln(TAG, "RX888 MkII sample-rate plan: ADC=%u Hz, decimation=%d, IQ=%.0f Hz",
+        adc_rate, 1 << decimation, configuredSampleRate);
 }
 
 double SoapySDDC::getSampleRate(const int, const size_t) const
 {
     TracePrintln(TAG, "*, *");
-    return radio_handler->GetADCSampleRate()/2;
+    if (radio_handler->getHardwareModel() == RX888r2 && configuredSampleRate > 0.0)
+        return configuredSampleRate;
+    return radio_handler->GetADCSampleRate() / 2.0;
 }
 
 SoapySDR::RangeList SoapySDDC::getSampleRateRange(const int, const size_t) const
 {
     TracePrintln(TAG, "*, *");
 
-    array<float, 2> limits = radio_handler->GetADCSampleRateLimits();
-
     SoapySDR::RangeList ranges;
-    ranges.push_back(SoapySDR::Range(limits[0]/2, limits[1]/2));
+    if (radio_handler->getHardwareModel() == RX888r2)
+    {
+        for (double rate : RX888_MKII_SAMPLE_RATES)
+        {
+            if (radio_handler->GetRFMode() == VHFMODE && rate > RX888_MKII_MAX_VHF_RATE)
+                continue;
+            ranges.push_back(SoapySDR::Range(rate, rate));
+        }
+    }
+    else
+    {
+        array<float, 2> limits = radio_handler->GetADCSampleRateLimits();
+        ranges.push_back(SoapySDR::Range(limits[0] / 2, limits[1] / 2));
+    }
 
     return ranges;
 }
