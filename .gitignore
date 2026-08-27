@@ -294,3 +294,4 @@ LIBCPPUNIT-prefix/
 !/docs/
 /docs/*
 !/docs/RX888_MKII_PERFORMANCE_AUDIT.md
+!/docs/MACOS_ARM64_COMMON_BASELINE.md

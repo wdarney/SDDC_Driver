@@ -20,6 +20,7 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE} " - Version: " ${VERSION} " / 
 # allow disabling optimizations - for debug reasons
 option(USE_SIMD_OPTIMIZATIONS "enable SIMD optimizations" ON)
 option(SDDC_ENABLE_IPO "enable interprocedural optimization in Release builds" ON)
+option(SDDC_BUILD_SOAPY_BENCHMARK "build the standalone SoapySDR RX benchmark" OFF)
 
 # allow enabling address sanitizer - for debug reasons
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -114,3 +115,7 @@ if (MSVC)
     add_subdirectory(ExtIO_sddc)
 endif()
 add_subdirectory(SoapySDDC)
+
+if(SDDC_BUILD_SOAPY_BENCHMARK)
+    add_subdirectory(benchmark)
+endif()
