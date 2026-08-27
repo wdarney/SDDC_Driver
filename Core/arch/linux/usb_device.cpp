@@ -213,10 +213,15 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
     if (ret != 0) {
       ErrorPrintln(TAG, "Failed to load firmware image in the SDR");
       libusb_close(dev_handle);
+      libusb_unref_device(device);
+      dev_handle = nullptr;
+      return;
     }
 
     /* rescan USB to get a new device handle */
     libusb_close(dev_handle);
+    libusb_unref_device(device);
+    dev_handle = nullptr;
 
     /* wait unitl firmware is ready */
     usleep(500 * 1000L);
@@ -229,11 +234,10 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
       return;
     }
 
-    libusb_unref_device(device);
-
     if (needs_firmware) {
       ErrorPrintln(TAG, "The USB device is still in boot loader mode");
       libusb_close(dev_handle);
+      libusb_unref_device(device);
       return;
     }
   }
