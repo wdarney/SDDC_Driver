@@ -157,7 +157,6 @@ private:
 
     uint32_t processor_count;
     r2iqThreadArg* threadArgs[N_MAX_R2IQ_THREADS];
-    std::mutex mutexR2iqControl;                   // r2iq control lock
     std::thread r2iq_thread[N_MAX_R2IQ_THREADS]; // thread pointers
 };
 

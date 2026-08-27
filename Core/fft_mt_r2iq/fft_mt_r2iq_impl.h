@@ -23,23 +23,36 @@
     plan_freq2time = &plan_freq2time_per_decimation[decimation];
     int decimate_count = 0;
 
-    vector<float> iq_output(inputbuffer_block_size);
+    float* iq_output = nullptr;
     size_t output_buffer_offset = 0;
 
-    // Pointer to the current input block
-    vector<int16_t> input_current_block;
-    // Pointer to the end of the previous input block minus BASE_FFT_SCRAP_SIZE
-    // (input_previous_block + inputbuffer_block_size - BASE_FFT_SCRAP_SIZE)
-    vector<int16_t> last_block_end(BASE_FFT_SCRAP_SIZE);
+    const int16_t* input_current_block = nullptr;
+    // Fixed overlap storage avoids constructing a vector on every input block.
+    std::array<int16_t, BASE_FFT_SCRAP_SIZE> last_block_end{};
 
     while(r2iqOn)
     {
+        input_current_block = inputbuffer->acquireReadBlock();
+        if (input_current_block == nullptr)
+            return 0;
+        if (!r2iqOn)
         {
-            std::unique_lock<std::mutex> lk(mutexR2iqControl);
-            input_current_block = inputbuffer->pop();
+            inputbuffer->releaseReadBlock();
+            return 0;
+        }
 
-            if (!r2iqOn)
+        if (iq_output == nullptr)
+        {
+            iq_output = outputbuffer->acquireWriteBlock();
+            if (iq_output == nullptr)
+            {
+                inputbuffer->releaseReadBlock();
                 return 0;
+            }
+            // The former vector<float>(size) value-initialized every output
+            // block. Some high-decimation offset paths do not overwrite every
+            // element, so preserve those zero-filled gaps when reusing blocks.
+            std::fill_n(iq_output, outputbuffer->getBlockSize(), 0.0f);
         }
 
         // @todo: move the following int16_t conversion to (32-bit) float
@@ -62,7 +75,7 @@
             blockMinMax.second = *minmax.second;
 #endif
             convert_float<false>(
-                /*source=*/input_current_block.data(),
+                /*source=*/input_current_block,
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
             );
@@ -75,15 +88,16 @@
                 /*len=*/BASE_FFT_SCRAP_SIZE
             );
             convert_float<true>(
-                /*source=*/input_current_block.data(),
+                /*source=*/input_current_block,
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
             );
         }
 
-        last_block_end = vector<int16_t>(
-            input_current_block.data() + inputbuffer_block_size - BASE_FFT_SCRAP_SIZE,
-            input_current_block.data() + inputbuffer_block_size
+        std::copy_n(
+            input_current_block + inputbuffer_block_size - BASE_FFT_SCRAP_SIZE,
+            BASE_FFT_SCRAP_SIZE,
+            last_block_end.data()
         );
 
 #if PRINT_INPUT_RANGE
@@ -194,23 +208,26 @@
             if (this->getSideband()) // lower sideband
             {
                 // mirror just by negating the imaginary Q of complex I/Q
-                copy<true>((fftwf_complex*)&iq_output.data()[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
+                copy<true>((fftwf_complex*)&iq_output[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
             }
             else // upper sideband
             {
-                copy<false>((fftwf_complex*)&iq_output.data()[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
+                copy<false>((fftwf_complex*)&iq_output[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
             }
         }
 
         decimate_count = (decimate_count + 1) & (deci_ratio - 1);
         if (decimate_count == 0) {
-            outputbuffer->push(iq_output);
+            outputbuffer->commitWriteBlock();
+            iq_output = nullptr;
             output_buffer_offset = 0;
         }
         else
         {
             output_buffer_offset += fft_output_half_size + fft_useful_size * (ffts_per_blocks-1);
         }
+
+        inputbuffer->releaseReadBlock();
     }
     return 0;
 }

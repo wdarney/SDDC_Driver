@@ -291,3 +291,6 @@ Makefile
 /generated/
 LIBCPPUNIT-prefix/
 /docs
+!/docs/
+/docs/*
+!/docs/RX888_MKII_PERFORMANCE_AUDIT.md

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <array>
 #include <vector>
+#include <cstring>
 
 #include "../config.h"
 
@@ -37,25 +38,24 @@ public:
         Stop();
     }
 
-    int getFullCount() const { return fullCount; }
+    int getFullCount() const { return fullCount.load(); }
 
-    int getEmptyCount() const { return emptyCount; }
+    int getEmptyCount() const { return emptyCount.load(); }
 
-    int getWriteCount() const { return writeCount; }
+    int getWriteCount() const { return writeCount.load(); }
 
     void Start()
     {
         std::unique_lock<std::mutex> lk(mutex);
         write_index = read_index = 0;
+        blocks_available = 0;
         stopped = false;
     }
 
     void Stop()
     {
         std::unique_lock<std::mutex> lk(mutex);
-        read_index = 0;
         stopped = true;
-        write_index = max_count / 2;
         nonfullCV.notify_all();
         nonemptyCV.notify_all();
     }
@@ -89,41 +89,84 @@ public:
         return buffers[(read_index.load() + max_count + offset) % max_count].data();
     }
 
-    void push(vector<T> arr)
+    // These acquire/commit APIs are intentionally SPSC: callers may hold one
+    // acquired block without the ring mutex while the opposite endpoint uses a
+    // different block. The block remains owned by the caller until commit or
+    // release advances its index.
+    T* acquireWriteBlock()
     {
-        WaitUntilNotFull();
-
-        std::unique_lock<std::mutex> lk(mutex);
-
-        buffers[write_index] = arr;
-
-        write_index = (write_index + 1) % max_count;
-        blocks_available++;
-
-        if (blocks_available == 1)
+        for (int i = 0; i < spin_count; i++)
         {
-            nonemptyCV.notify_all();
+            if (stopped.load(std::memory_order_acquire)) return nullptr;
+            if (blocks_available.load(std::memory_order_acquire) < max_count)
+                return buffers[write_index.load(std::memory_order_relaxed)].data();
         }
 
-        writeCount++;
+        std::unique_lock<std::mutex> lk(mutex);
+        if (blocks_available >= max_count) fullCount++;
+        nonfullCV.wait(lk, [this] {
+            return stopped.load(std::memory_order_relaxed) || blocks_available < max_count;
+        });
+        if (stopped.load(std::memory_order_relaxed)) return nullptr;
+        return buffers[write_index.load(std::memory_order_relaxed)].data();
     }
 
-    vector<T> pop()
+    bool commitWriteBlock()
     {
-        WaitUntilNotEmpty();
-
         std::unique_lock<std::mutex> lk(mutex);
+        if (stopped.load(std::memory_order_relaxed)) return false;
 
-        vector<T> vec = buffers[read_index];
+        write_index = (write_index.load(std::memory_order_relaxed) + 1) % max_count;
+        blocks_available++;
+        writeCount++;
+        lk.unlock();
+        nonemptyCV.notify_one();
+        return true;
+    }
 
-        read_index = (read_index + 1) % max_count;
-        blocks_available--;
-
-        if (blocks_available == max_count - 1)
+    const T* acquireReadBlock()
+    {
+        for (int i = 0; i < spin_count; i++)
         {
-            nonfullCV.notify_all();
+            if (stopped.load(std::memory_order_acquire)) return nullptr;
+            if (blocks_available.load(std::memory_order_acquire) > 0)
+                return buffers[read_index.load(std::memory_order_relaxed)].data();
         }
 
+        std::unique_lock<std::mutex> lk(mutex);
+        if (blocks_available <= 0) emptyCount++;
+        nonemptyCV.wait(lk, [this] {
+            return stopped.load(std::memory_order_relaxed) || blocks_available > 0;
+        });
+        if (stopped.load(std::memory_order_relaxed)) return nullptr;
+        return buffers[read_index.load(std::memory_order_relaxed)].data();
+    }
+
+    void releaseReadBlock()
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        if (blocks_available == 0) return;
+
+        read_index = (read_index.load(std::memory_order_relaxed) + 1) % max_count;
+        blocks_available--;
+        lk.unlock();
+        nonfullCV.notify_one();
+    }
+
+    void push(const std::vector<T>& arr)
+    {
+        T* dest = acquireWriteBlock();
+        if (dest == nullptr) return;
+        std::memcpy(dest, arr.data(), block_size * sizeof(T));
+        commitWriteBlock();
+    }
+
+    std::vector<T> pop()
+    {
+        const T* source = acquireReadBlock();
+        if (source == nullptr) return {};
+        std::vector<T> vec(source, source + block_size);
+        releaseReadBlock();
         return vec;
     }
 
@@ -171,17 +214,17 @@ public:
         }
     }
 
-    volatile atomic<size_t> read_index;
-    volatile atomic<size_t> write_index;
-    volatile atomic<size_t> blocks_available;
+    std::atomic<size_t> read_index;
+    std::atomic<size_t> write_index;
+    std::atomic<size_t> blocks_available;
 
 private:
-    int emptyCount;
-    int fullCount;
-    int writeCount;
+    std::atomic<int> emptyCount;
+    std::atomic<int> fullCount;
+    std::atomic<int> writeCount;
 
     std::mutex mutex;
-    bool stopped;
+    std::atomic<bool> stopped;
     std::condition_variable nonemptyCV;
     std::condition_variable nonfullCV;
 

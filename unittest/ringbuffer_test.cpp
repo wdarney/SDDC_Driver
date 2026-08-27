@@ -175,3 +175,40 @@ TEST_CASE(RingBufferFixture, PeekTest)
     auto rptr2 = buffer.peekReadPtr(-1);
     CHECK_EQUAL(rptr0, rptr2);
 }*/
+
+TEST_CASE(RingBufferFixture, OwnershipAPI)
+{
+    ringbuffer<int16_t, 2> buffer;
+    buffer.setBlockSize(16);
+    buffer.Start();
+
+    int16_t* write = buffer.acquireWriteBlock();
+    REQUIRE_TRUE(write != nullptr);
+    for (int i = 0; i < buffer.getBlockSize(); ++i)
+        write[i] = static_cast<int16_t>(i * 3 - 7);
+    REQUIRE_TRUE(buffer.commitWriteBlock());
+
+    const int16_t* read = buffer.acquireReadBlock();
+    REQUIRE_TRUE(read != nullptr);
+    for (int i = 0; i < buffer.getBlockSize(); ++i)
+        REQUIRE_EQUAL(read[i], static_cast<int16_t>(i * 3 - 7));
+    buffer.releaseReadBlock();
+    buffer.Stop();
+}
+
+TEST_CASE(RingBufferFixture, StopUnblocksReader)
+{
+    ringbuffer<int16_t, 2> buffer;
+    buffer.setBlockSize(16);
+    buffer.Start();
+
+    const int16_t* result = reinterpret_cast<const int16_t*>(1);
+    std::thread reader([&buffer, &result]() {
+        result = buffer.acquireReadBlock();
+    });
+
+    std::this_thread::sleep_for(10ms);
+    buffer.Stop();
+    reader.join();
+    REQUIRE_TRUE(result == nullptr);
+}

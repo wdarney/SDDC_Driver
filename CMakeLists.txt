@@ -19,6 +19,7 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE} " - Version: " ${VERSION} " / 
 
 # allow disabling optimizations - for debug reasons
 option(USE_SIMD_OPTIMIZATIONS "enable SIMD optimizations" ON)
+option(SDDC_ENABLE_IPO "enable interprocedural optimization in Release builds" ON)
 
 # allow enabling address sanitizer - for debug reasons
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -26,7 +27,18 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 if (MSVC)
-    set(CMAKE_CXX_FLAGS "-O2 /EHsc /W3")
+    add_compile_options(/EHsc /W3 /fp:precise)
+    add_compile_options($<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Ob2>)
+
+    if(SDDC_ENABLE_IPO)
+        include(CheckIPOSupported)
+        check_ipo_supported(RESULT SDDC_IPO_SUPPORTED OUTPUT SDDC_IPO_ERROR)
+        if(SDDC_IPO_SUPPORTED)
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        else()
+            message(WARNING "Release IPO/LTCG is unavailable: ${SDDC_IPO_ERROR}")
+        endif()
+    endif()
 
     get_filename_component(SDKPATH ${CMAKE_LINKER} DIRECTORY)
     find_program(LIBEXE lib HINTS ${SDKPATH} REQUIRED)

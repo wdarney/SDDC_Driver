@@ -83,13 +83,18 @@ jobs:
     - name: Configure CMake64
       shell: bash
       working-directory: ${{runner.workspace}}/build64
-      run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -G "Visual Studio 17 2022"
+      run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -G "Visual Studio 17 2022" -A x64
 
     - name: Build
       working-directory: ${{runner.workspace}}/build64
       shell: bash
       # Execute the build.  You can specify a specific target with "--target <NAME>"
       run: cmake --build . --config $BUILD_TYPE
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: SDDCSupport-Windows-x64
+        path: ${{runner.workspace}}/build64/SoapySDDC/Release/SDDCSupport.dll
 
     - name: Install FFTW3
       working-directory: ${{runner.workspace}}/build

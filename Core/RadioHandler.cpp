@@ -48,29 +48,41 @@ void RadioHandler::OnDataPacket()
 	{
 		if(r2iqEnabled)
 		{
-			auto buf = iq_buffer.pop();
+			const float* buf = iq_buffer.acquireReadBlock();
 
-			if (!streamRunning)
+			if (buf == nullptr)
 				break;
+			if (!streamRunning)
+			{
+				iq_buffer.releaseReadBlock();
+				break;
+			}
 
 			if (fc != 0.0f)
 			{
 				std::unique_lock<std::mutex> lk(fc_mutex);
-				shift_limited_unroll_C_sse_inp_c((complexf*)buf.data(), len_iq/2, stateFineTune);
+				shift_limited_unroll_C_sse_inp_c((complexf*)buf, len_iq/2, stateFineTune);
 			}
 
-			callbackIQ(callbackIQContext, (sddc_complex_t*)buf.data(), len_iq/2);
+			callbackIQ(callbackIQContext, (sddc_complex_t*)buf, len_iq/2);
+			iq_buffer.releaseReadBlock();
 
 			count_iq_samples += len_iq/2;
 		}
 		else
 		{
-			auto buf = real_buffer.pop();
+			const int16_t* buf = real_buffer.acquireReadBlock();
 
-			if (!streamRunning)
+			if (buf == nullptr)
 				break;
+			if (!streamRunning)
+			{
+				real_buffer.releaseReadBlock();
+				break;
+			}
 
-			callbackReal(callbackRealContext, buf.data(), len_real);
+			callbackReal(callbackRealContext, buf, len_real);
+			real_buffer.releaseReadBlock();
 
 			count_real_samples += len_real;
 		}

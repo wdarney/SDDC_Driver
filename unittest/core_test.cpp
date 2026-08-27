@@ -65,10 +65,14 @@ class fx3handler2 : public fx3class
         input.setBlockSize(transferSamples);
         run = true;
         emuthread = std::thread([&input, this]{
+            uint32_t block_index = 0;
             while(run)
             {
-                vector<int16_t> put(transferSamples, 0x5A5A);
+                vector<int16_t> put(transferSamples);
+                for (uint32_t i = 0; i < transferSamples; ++i)
+                    put[i] = static_cast<int16_t>(i * 257u + block_index * 31u);
                 input.push(put);
+                ++block_index;
                 ++nxfers;
                 std::this_thread::sleep_for(1ms);
             }
@@ -120,9 +124,20 @@ public:
 
 static uint32_t frame_count;
 static uint64_t totalsize;
+static uint64_t first_block_hash;
 
-static void Callback(void*, const sddc_complex_t*, uint32_t len)
+static void Callback(void*, const sddc_complex_t* data, uint32_t len)
 {
+    if (frame_count == 0)
+    {
+        first_block_hash = 1469598103934665603ULL;
+        const uint8_t* bytes = reinterpret_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < len * sizeof(sddc_complex_t); ++i)
+        {
+            first_block_hash ^= bytes[i];
+            first_block_hash *= 1099511628211ULL;
+        }
+    }
     frame_count++;
     totalsize += len;
 }
@@ -195,6 +210,7 @@ TEST_CASE(CoreFixture, R2IQTest)
     {
         frame_count = 0;
         totalsize = 0;
+        first_block_hash = 0;
         radio->SetDecimation(decimate);
         radio->Start(true); // full bandwidth
         std::this_thread::sleep_for(1s);
@@ -203,6 +219,8 @@ TEST_CASE(CoreFixture, R2IQTest)
         REQUIRE_TRUE(frame_count > 0);
         REQUIRE_TRUE(totalsize > 0);
         REQUIRE_EQUAL(totalsize / frame_count, transferSamples/2);
+        printf("R2IQ signature decimation=%d hash=%016" PRIx64 " samples=%" PRIu64 "\n",
+            decimate, first_block_hash, totalsize / frame_count);
     }
 
     delete radio;

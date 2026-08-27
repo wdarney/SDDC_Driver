@@ -159,8 +159,11 @@ void fx3handler::PacketRead(uint32_t data_size, uint8_t *data, void *context)
 
     assert(data_size == handler->inputbuffer->getBlockSize() * sizeof(int16_t));
 
-    vector<int16_t> vec_data((int16_t*)data, (int16_t*)data + data_size / sizeof(int16_t));
-    handler->inputbuffer->push(vec_data);
+    int16_t* destination = handler->inputbuffer->acquireWriteBlock();
+    if (destination == nullptr) return;
+
+    std::memcpy(destination, data, data_size);
+    handler->inputbuffer->commitWriteBlock();
 }
 
 bool fx3handler::ReadDebugTrace(uint8_t *pdata, uint8_t len)
