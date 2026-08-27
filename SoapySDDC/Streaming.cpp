@@ -43,8 +43,10 @@ SoapySDR::Stream *SoapySDDC::setupStream(const int direction,
 
     if (direction != SOAPY_SDR_RX)
         throw std::runtime_error("setupStream failed: SDDC only supports RX");
-    if (channels.size() != 1)
-        throw std::runtime_error("setupStream failed: SDDC only supports one channel");
+    // SoapySDR uses an empty channel list to request the device's default
+    // channel. SDDC has only RX channel 0, so accept either {} or {0}.
+    if (channels.size() > 1 || (!channels.empty() && channels[0] != 0))
+        throw std::runtime_error("setupStream failed: SDDC only supports RX channel 0");
     
     if (format == SOAPY_SDR_CF32)
     {
