@@ -72,7 +72,7 @@ None were added. The AVX2 file still includes the common R2IQ implementation and
 
 - Homebrew SoapySDR 0.8.1, API 0.8.0 and ABI 0.8, native ARM64.
 - With `SOAPY_SDR_PLUGIN_PATH` set to the artifact module directory, Soapy reports module version `1.0.1-e3e5b15` and factory `SDDC`.
-- No RX888 was attached during this baseline, so enumeration correctly returned zero devices.
+- The standalone benchmark discovered and streamed from an attached RX888 MkII.
 
 ## Thread behavior on Apple Silicon
 
@@ -95,9 +95,11 @@ The unmodified common optimization was first built and installed before the benc
 - Three timed R2IQ test runs took 7.46, 7.06, and 8.07 seconds wall time, but the test contains fixed sleeps and is not a driver-throughput benchmark.
 - Higher-decimation first-output hashes varied in one repeated run. This is consistent with the documented ninth FFT window extending beyond initialized/allocated input geometry. That algorithm was not changed here.
 - Module load and factory registration: passed.
-- Live RX888 sample throughput, CPU percentage, overflows, and real-time ratio: not measured because no SDDC device was attached.
+- A five-second 64 MS/s CF32 run sustained 63.994 MS/s (real-time ratio 1.000), used 69.74% of one CPU core, and reported zero timeouts, overflows, or other stream errors.
 
-Therefore the macOS baseline result is: the common optimized code builds, loads, and passes focused non-hardware tests on Apple Silicon, while the hardware performance baseline remains pending an attached RX888 MkII.
+Therefore the macOS baseline result is: the common optimized code builds, loads,
+passes focused tests, and sustains the requested 64 MS/s CF32 rate on Apple
+Silicon. Apple-specific performance changes remain intentionally out of scope.
 
 ## Artifacts and benchmark
 
@@ -135,7 +137,10 @@ The benchmark reports actual sample rate, wall and process CPU time, samples per
 
 ## Stop boundary
 
-Do not begin NEON intrinsics, Accelerate/vDSP, alternate FFTW builds, IPO/LTO changes, QoS, affinity, or Apple-specific thread tuning until the standalone benchmark is run with an attached RX888 MkII and this common-code baseline is recorded.
+The attached-RX888 common-code baseline and SDR++ bundle runtime validation are
+now recorded. This branch contains no new NEON intrinsics, Accelerate/vDSP,
+alternate FFTW builds, IPO/LTO changes, QoS, affinity, or Apple-specific thread
+tuning; those remain separate follow-up work.
 
 ## SDR++ bundle linkage
 
@@ -154,3 +159,12 @@ The module is staged under
 dependencies use `@rpath`, with `LC_RPATH` set to
 `@loader_path/../../Frameworks`, so installation under
 `Contents/SoapySDR/modules0.8` resolves only against the app's bundled runtime.
+
+Runtime validation in `/Applications/SDR++.app` confirmed that the process maps
+exactly one SoapySDR, FFTW, and libusb implementation, all under
+`Contents/Frameworks`; no `/opt/homebrew` copy is loaded. SDR++ uses SoapySDR's
+empty channel list to request the default RX channel, so `setupStream()` accepts
+both `{}` and `{0}` while continuing to reject multiple or nonzero channels.
+With the RX888 in VHF mode at 8 MS/s and a 128 MHz ADC clock, firmware loading,
+`setupStream()`, live spectrum/waterfall data, Stop, and background driver
+cleanup all completed without a crash or libusb reference-count assertion.
