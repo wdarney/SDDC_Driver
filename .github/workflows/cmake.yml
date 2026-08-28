@@ -65,20 +65,21 @@ jobs:
       shell: bash
       run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
 
+    - uses: actions/upload-artifact@v4
+      with:
+        name: SDDCSupport-Windows-x64
+        path: ${{runner.workspace}}/build64/SoapySDDC/Release/SDDCSupport.dll
+
     - name: Build x64 R2IQ tests
       working-directory: ${{runner.workspace}}/build64
       shell: bash
       run: cmake --build . --config $BUILD_TYPE --target unittest
 
     - name: Run x64 R2IQ tests
+      timeout-minutes: 3
       working-directory: ${{runner.workspace}}/build64
       shell: bash
       run: ctest -C $BUILD_TYPE -R "CoreFixture_(R2IQTest|R2IQTonePurityTest)" --output-on-failure
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: SDDCSupport-Windows-x64
-        path: ${{runner.workspace}}/build64/SoapySDDC/Release/SDDCSupport.dll
 
   build-on-linux:
     # The CMake configure and build commands are platform agnostic and should work equally
