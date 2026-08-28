@@ -129,6 +129,10 @@ vector<USBDeviceInfo> USBDevice::getDeviceList()
     libusb_device *device = list[j];
     struct libusb_device_descriptor desc;
     int ret = libusb_get_device_descriptor(device, &desc);
+    if (ret < 0) {
+      USB_ERROR_PRINTLN(TAG, ret);
+      continue;
+    }
     for (int i = 0; i < n_usb_device_ids; ++i) {
       if (!(desc.idVendor == usb_device_ids[i].vid &&
             desc.idProduct == usb_device_ids[i].pid)) {
@@ -136,7 +140,7 @@ vector<USBDeviceInfo> USBDevice::getDeviceList()
       }
 
       USBDeviceInfo dev_info;
-      dev_info.index = count;
+      dev_info.index = count++;
       dev_info.usb_vendor_id  = desc.idVendor;
       dev_info.usb_product_id = desc.idProduct;
       dev_info.need_firmware  = usb_device_ids[i].needs_firmware;
@@ -145,67 +149,68 @@ vector<USBDeviceInfo> USBDevice::getDeviceList()
       ret = libusb_open(device, &dev_handle);
       if (ret < 0) {
         USB_ERROR_PRINTLN(TAG, ret);
-        goto FAIL2;
+        continue;
       }
 
       if (desc.iManufacturer) {
         ret = libusb_get_string_descriptor_ascii(dev_handle, desc.iManufacturer,
                       (unsigned char*)temporary_string, MAX_STRING_BYTES);
         if (ret < 0) {
-          USB_ERROR_PRINTLN(TAG, ret);
-          goto FAIL3;
+          WarnPrintln(TAG, "Unable to read USB manufacturer string: %s",
+                      libusb_strerror(ret));
         }
-
-        dev_info.manufacturer = temporary_string;
+        else {
+          dev_info.manufacturer.assign(temporary_string, ret);
+        }
       }
 
       if (desc.iProduct) {
         ret = libusb_get_string_descriptor_ascii(dev_handle, desc.iProduct,
                       (unsigned char*)temporary_string, MAX_STRING_BYTES);
         if (ret < 0) {
-          USB_ERROR_PRINTLN(TAG, ret);
-          goto FAIL3;
+          WarnPrintln(TAG, "Unable to read USB product string: %s",
+                      libusb_strerror(ret));
         }
-
-        dev_info.product = temporary_string;
+        else {
+          dev_info.product.assign(temporary_string, ret);
+        }
       }
 
       if (desc.iSerialNumber) {
         ret = libusb_get_string_descriptor_ascii(dev_handle, desc.iSerialNumber,
                       (unsigned char*)temporary_string, MAX_STRING_BYTES);
         if (ret < 0) {
-          USB_ERROR_PRINTLN(TAG, ret);
-          goto FAIL3;
+          WarnPrintln(TAG, "Unable to read USB serial string: %s",
+                      libusb_strerror(ret));
         }
+        else {
+          dev_info.serial_number.assign(temporary_string, ret);
+        }
+      }
 
-        dev_info.serial_number = temporary_string;
-      }
+      if (dev_info.product.empty())
+        dev_info.product = dev_info.need_firmware ? "Cypress FX3 Bootloader" : "RX888";
+
       device_infos.push_back(dev_info);
-      ret = 0;
-FAIL3:
       libusb_close(dev_handle);
-      if (ret < 0) {
-        goto FAIL2;
-      }
-      count++;
     }
   }
 
-FAIL2:
   libusb_free_device_list(list, 1);
 
   return device_infos;
 }
 
 
-void USBDevice::open(USBDeviceInfo index, const char* image,
+bool USBDevice::open(USBDeviceInfo index, const char* image,
                               uint32_t size)
 {
-  libusb_device *device;
+  libusb_device *device = nullptr;
   int needs_firmware = 0;
   dev_handle = find_usb_device(index, &device, &needs_firmware);
   if (dev_handle == 0) {
     ErrorPrintln(TAG, "Unable to open the USB device");
+    return false;
   }
 
   if (needs_firmware) {
@@ -215,7 +220,7 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
       libusb_close(dev_handle);
       libusb_unref_device(device);
       dev_handle = nullptr;
-      return;
+      return false;
     }
 
     /* rescan USB to get a new device handle */
@@ -223,22 +228,34 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
     libusb_unref_device(device);
     dev_handle = nullptr;
 
-    /* wait unitl firmware is ready */
-    usleep(500 * 1000L);
+    // Windows (especially through a VM) can take several seconds to bind the
+    // driver after the FX3 disconnects and returns with its streamer PID.
+    constexpr int firmware_reopen_attempts = 40;
+    constexpr int firmware_reopen_delay_us = 250 * 1000;
+    for (int attempt = 1; attempt <= firmware_reopen_attempts; ++attempt) {
+      usleep(firmware_reopen_delay_us);
+      device = nullptr;
+      needs_firmware = 0;
+      dev_handle = find_usb_device(index, &device, &needs_firmware);
 
-    needs_firmware = 0;
-    dev_handle = find_usb_device(index, &device, &needs_firmware);
+      if (dev_handle != nullptr && !needs_firmware)
+        break;
 
-    if (dev_handle == 0) {
-      ErrorPrintln(TAG, "Unable to open the USB device after loading the firmware");
-      return;
+      if (dev_handle != nullptr) {
+        libusb_close(dev_handle);
+        dev_handle = nullptr;
+      }
+      if (device != nullptr) {
+        libusb_unref_device(device);
+        device = nullptr;
+      }
+      DebugPrintln(TAG, "Waiting for firmware device (%d/%d)",
+                   attempt, firmware_reopen_attempts);
     }
 
-    if (needs_firmware) {
-      ErrorPrintln(TAG, "The USB device is still in boot loader mode");
-      libusb_close(dev_handle);
-      libusb_unref_device(device);
-      return;
+    if (dev_handle == nullptr || needs_firmware) {
+      ErrorPrintln(TAG, "Unable to open the USB device after loading the firmware");
+      return false;
     }
   }
 
@@ -247,7 +264,8 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
       ErrorPrintln(TAG, "The USB device isn't capable of using USB 3.x SuperSpeed");
       libusb_unref_device(device);
       libusb_close(dev_handle);
-      return;
+      dev_handle = nullptr;
+      return false;
   }
 
   /* list endpoints */
@@ -258,7 +276,8 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
     log_error("list_endpoints() failed", __func__, __FILE__, __LINE__);
     libusb_unref_device(device);
     libusb_close(dev_handle);
-    return;
+    dev_handle = nullptr;
+    return false;
   }
 
   // No need for the device pointer anymore
@@ -281,6 +300,8 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
   if (bulk_in_endpoint_address == 0) {
     fprintf(stderr, "ERROR - bulk in endpoint not found\n");
     libusb_close(dev_handle);
+    dev_handle = nullptr;
+    return false;
   }
 
   /* we are good here - create and initialize the usb_device */
@@ -294,6 +315,7 @@ void USBDevice::open(USBDeviceInfo index, const char* image,
   this->bulk_in_endpoint_address = bulk_in_endpoint_address;
   this->bulk_in_max_packet_size = bulk_in_max_packet_size;
   this->bulk_in_max_burst = bulk_in_max_burst;
+  return true;
 }
 
 
@@ -301,7 +323,10 @@ void USBDevice::close()
 {
   TracePrintln(TAG, "");
 
-  libusb_close(dev_handle);
+  if (dev_handle != nullptr) {
+    libusb_close(dev_handle);
+    dev_handle = nullptr;
+  }
 }
 
 
@@ -326,6 +351,11 @@ int USBDevice::handleEvents()
  */
 int USBDevice::control(uint8_t request, uint16_t value,
                        uint16_t index, uint8_t *data, uint16_t length, bool read) {
+
+  if (dev_handle == nullptr) {
+    ErrorPrintln(TAG, "USB control request attempted without an open device");
+    return -1;
+  }
 
   const uint8_t bmWriteRequestType = LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE;
   const uint8_t bmReadRequestType = LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE;
@@ -377,7 +407,12 @@ libusb_device_handle *USBDevice::find_usb_device(USBDeviceInfo dev_select,
   for (ssize_t j = 0; j < nusbdevices; ++j) {
     libusb_device *dev = list[j];
     struct libusb_device_descriptor desc;
-    libusb_get_device_descriptor(dev, &desc);
+    int descriptor_ret = libusb_get_device_descriptor(dev, &desc);
+    if (descriptor_ret < 0) {
+      USB_ERROR_PRINTLN(TAG, descriptor_ret);
+      libusb_unref_device(dev);
+      continue;
+    }
     for (int i = 0; i < n_usb_device_ids; ++i) {
       if (desc.idVendor == usb_device_ids[i].vid &&
         desc.idProduct == usb_device_ids[i].pid)
@@ -406,6 +441,8 @@ libusb_device_handle *USBDevice::find_usb_device(USBDeviceInfo dev_select,
   int ret = libusb_open(*device, &dev_handle);
   if (ret < 0) {
     USB_ERROR_PRINTLN(TAG, ret);
+    libusb_unref_device(*device);
+    *device = nullptr;
     return 0;
   }
 
@@ -413,11 +450,15 @@ libusb_device_handle *USBDevice::find_usb_device(USBDeviceInfo dev_select,
   ret = libusb_kernel_driver_active(dev_handle, 0);
   if (ret < 0) {
     libusb_close(dev_handle);
+    libusb_unref_device(*device);
+    *device = nullptr;
     USB_ERROR_PRINTLN(TAG, ret);
     return 0;
   }
   if (ret == 1) {
     libusb_close(dev_handle);
+    libusb_unref_device(*device);
+    *device = nullptr;
     ErrorPrintln(TAG, "A kernel driver is active on the device. This prevents use by SDDC_Driver");
     return 0;
   }
@@ -426,6 +467,8 @@ libusb_device_handle *USBDevice::find_usb_device(USBDeviceInfo dev_select,
   ret = libusb_claim_interface(dev_handle, 0);
   if (ret < 0) {
     libusb_close(dev_handle);
+    libusb_unref_device(*device);
+    *device = nullptr;
     USB_ERROR_PRINTLN(TAG, ret);
     return 0;
   }

@@ -3,6 +3,7 @@
 #include <sys/types.h>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <SoapySDR/Types.hpp>
 #include <SoapySDR/Time.hpp>
 
@@ -46,8 +47,18 @@ SoapySDDC::SoapySDDC(uint8_t dev_index): deviceId(dev_index),
 {
     TracePrintln(TAG, "%d", dev_index);
     vector<SDDC::DeviceItem> devices = RadioHandler::GetDeviceList();
+    if (dev_index >= devices.size())
+        throw std::runtime_error("SDDC device index is no longer available");
+
     radio_handler = new RadioHandler();
-    radio_handler->Init(devices[dev_index]);
+    const sddc_err_t init_result = radio_handler->Init(devices[dev_index]);
+    if (init_result != ERR_SUCCESS)
+    {
+        delete radio_handler;
+        radio_handler = nullptr;
+        throw std::runtime_error("SDDC device initialization failed with error " +
+                                 std::to_string(static_cast<int>(init_result)));
+    }
     radio_handler->AttachIQ(_Callback, this);
     radio_handler->SetDecimation(0);
 }
@@ -55,7 +66,8 @@ SoapySDDC::SoapySDDC(uint8_t dev_index): deviceId(dev_index),
 SoapySDDC::~SoapySDDC(void)
 {
     TracePrintln(TAG, "");
-    radio_handler->Stop();
+    if (radio_handler != nullptr)
+        radio_handler->Stop();
 
     delete radio_handler;
 }

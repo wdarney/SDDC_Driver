@@ -51,7 +51,7 @@ class USBDevice
 
     std::vector<USBDeviceInfo> getDeviceList();
 
-    void open(USBDeviceInfo dev_select, const char* image, uint32_t size);
+    bool open(USBDeviceInfo dev_select, const char* image, uint32_t size);
     void close();
     int control(uint8_t request, uint16_t value, uint16_t index, uint8_t *data, uint16_t length, bool read);
     int handleEvents();

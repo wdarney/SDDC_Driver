@@ -123,8 +123,13 @@ sddc_err_t RadioHandler::Init(SDDC::DeviceItem dev_index)
 		return ERR_FX3_OPEN_FAILED;
 	}
 
-	uint8_t rdata[4];
-	fx3->GetHardwareInfo((uint32_t*)rdata);
+	uint32_t hardware_info = 0;
+	if (!fx3->GetHardwareInfo(&hardware_info))
+	{
+		DebugPrintln(TAG, "Unable to read FX3 hardware information");
+		return ERR_FX3_TRANSFER_FAILED;
+	}
+	const uint8_t* rdata = reinterpret_cast<const uint8_t*>(&hardware_info);
 
 	devModel = (RadioModel)rdata[0];
 	devFirmware = (rdata[1] << 8) + rdata[2];

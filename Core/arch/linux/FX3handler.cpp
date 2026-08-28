@@ -54,11 +54,20 @@ bool fx3handler::Open(SDDC::DeviceItem dev_selector)
     }
 
 
-    dev.open(usb_device_infos[dev_selector.index], firmware_data, firmware_size);
+    if (!dev.open(usb_device_infos[dev_selector.index], firmware_data, firmware_size))
+    {
+        ErrorPrintln(TAG, "Unable to open the FX3 device");
+        return false;
+    }
     DebugPrintln(TAG, "Open device with dev_index=%d", dev_selector.index);
 
     usleep(5000);
-    Control(STOPFX3, (uint8_t)0);
+    if (!Control(STOPFX3, (uint8_t)0))
+    {
+        ErrorPrintln(TAG, "Unable to stop the FX3 stream during initialization");
+        dev.close();
+        return false;
+    }
 
     return true;
 }
