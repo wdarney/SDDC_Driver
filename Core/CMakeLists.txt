@@ -52,6 +52,13 @@ add_library(SDDC_CORE STATIC ${SRC})
 set_target_properties(SDDC_CORE PROPERTIES POSITION_INDEPENDENT_CODE True)
 target_compile_definitions(SDDC_CORE PUBLIC _CRT_SECURE_NO_WARNINGS)
 
+if(MSVC)
+  # LIBFFTW supplies both fftw3.h and the import library.  Make the dependency
+  # explicit so building only SDDCSupport cannot compile SDDC_CORE before the
+  # ExternalProject has downloaded and prepared FFTW.
+  add_dependencies(SDDC_CORE LIBFFTW)
+endif()
+
 target_include_directories(SDDC_CORE PUBLIC "${LIBFFTW_INCLUDE_DIRS}")
 target_link_directories(SDDC_CORE PUBLIC "${LIBFFTW_LIBRARY_DIRS}")
 target_link_libraries(SDDC_CORE PUBLIC ${LIBFFTW_LIBRARIES})
