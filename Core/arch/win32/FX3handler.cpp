@@ -310,6 +310,14 @@ bool fx3handler::BeginDataXfer(uint8_t* buffer, long size, void** context)
         *context = read;
     }
 
+    // A completed OVERLAPPED must be reset before it is submitted again.
+    // Preserve the event handle, but clear Internal/InternalHigh and the
+    // offset union written by the previous DeviceIoControl operation.
+    const HANDLE event = read->overlap.hEvent;
+    ResetEvent(event);
+    read->overlap = {};
+    read->overlap.hEvent = event;
+
     read->buffer = buffer;
     read->size = size;
     read->cy_context = endpoint->BeginDataXfer(buffer, size, &read->overlap);
@@ -365,14 +373,17 @@ void fx3handler::AdcSamplesProcess()
     WarnPrintln(TAG, "STARTUP USB 2/3: initial Cypress transfers queued");
 
     size_t read_index = 0;
-    bool first_transfer = true;
+    size_t completed_transfers = 0;
     bool first_block = true;
     while (run.load()) {
         if (!FinishDataXfer(&contexts[read_index])) break;
 
-        if (first_transfer) {
+        ++completed_transfers;
+        if (completed_transfers == 1) {
             WarnPrintln(TAG, "STARTUP USB 3/3: first Cypress transfer completed");
-            first_transfer = false;
+        }
+        else if (completed_transfers == 2) {
+            WarnPrintln(TAG, "STARTUP USB: second Cypress transfer completed");
         }
 
         int16_t* destination = inputbuffer != nullptr ? inputbuffer->acquireWriteBlock() : nullptr;
