@@ -8,7 +8,7 @@ Audit baseline: upstream `e540d6c2df41e629e9a487090411e311493d49ca`.
 
 | Stage | Allocation / ownership | Baseline transition | Synchronization |
 |---|---|---|---|
-| FX3 / libusb | `streaming_open_async()` allocates 16 fixed 128 KiB USB frames and 16 `libusb_transfer` objects once per stream | FX3 DMA/USB fills a libusb-owned frame | libusb event thread and `active_transfers` atomic |
+| FX3 / Windows CyAPI | Four fixed 128 KiB overlapped-transfer buffers are allocated once per stream | FX3 DMA/USB fills a CyAPI-owned frame | Cypress driver overlapped I/O and one completion thread |
 | USB callback | `PacketRead()` constructed a 65,536-element `vector<int16_t>` per transfer | full 128 KiB copy from USB frame to temporary vector | callback blocks when the input ring is full |
 | Raw input ring | 64 vectors, resized once to 65,536 `int16_t` values each | `push(vector by value)` copied the temporary into the ring; `pop()` copied it out again | atomics plus one mutex/CV pair; 100-iteration spin before sleeping |
 | R2IQ input preparation | one FFTW-aligned float work area plus FFT workspaces, allocated in `Init()` | complete raw block converted from int16 to float; 2,048-sample overlap copied into a newly constructed vector | one R2IQ worker in current upstream |
@@ -71,7 +71,7 @@ cmake --build build-x64 --config Release --target SDDCSupport
 
 Expected module output: `build-x64/SoapySDDC/Release/SDDCSupport.dll`.
 
-Runtime dependencies include the existing SoapySDR 0.8 runtime used by SDR++, `libusb-1.0.dll`, `libfftw3f-3.dll`, and the matching Microsoft Visual C++ runtime. Dependency names and machine architecture must be verified on the produced DLL with `dumpbin /DEPENDENTS` and `dumpbin /HEADERS` before deployment.
+Runtime dependencies include the existing SoapySDR 0.8 runtime used by SDR++, `libfftw3f-3.dll`, the Cypress CyUSB device driver, Windows `SetupAPI.dll`, and the matching Microsoft Visual C++ runtime. The Windows module must not depend on `libusb-1.0.dll`: Windows uses the restored native CyAPI backend so both bootloader and post-firmware modes remain on the Cypress driver. Dependency names and machine architecture must be verified on the produced DLL with `dumpbin /DEPENDENTS` and `dumpbin /HEADERS` before deployment.
 
 ## Validation status and next measurements
 
@@ -80,5 +80,5 @@ Runtime dependencies include the existing SoapySDR 0.8 runtime used by SDR++, `l
 - Deterministic non-constant int16 input produced bit-identical first-block CF32 hashes against pristine upstream for decimation indices 0 through 4 when both runs used the same FFTW wisdom. Repeated optimized runs were stable. ADC randomization, tuning offsets, and both sidebands still need equivalent coverage.
 - AddressSanitizer build and R2IQ test completed without an instrumented-code finding; the FFTW window overrun described above remains because FFTW itself was not ASan-instrumented.
 - Existing `BasicTest`: fails identically on pristine upstream because the test expects the old 64 MHz default while `DEFAULT_ADC_FREQ` is now 1 MHz.
-- Windows MSVC x64 build, DLL dependency inspection, MSVC vectorization report, attached RX888 MkII streaming, and total SDR++ CPU measurements: not yet performed.
+- The optimized common code previously passed an MSVC x64 compile, but the restored CyAPI backend still requires a fresh Windows build, DLL dependency inspection, attached RX888 MkII firmware/streaming test, and total SDR++ CPU measurements.
 - DSP equivalence still requires deterministic baseline/optimized CF32 comparison across all decimations, tuning offsets, ADC randomization states, and USB/LSB modes before this is treated as a production DLL.

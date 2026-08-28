@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.13)
 
-file(GLOB SRC "*.cpp" "radio/*.cpp" "pffft/*.cpp" "fft_mt_r2iq/*.cpp" "dsp/*.cpp" "arch/linux/*.c" "arch/linux/*.cpp")
+file(GLOB SRC "*.cpp" "radio/*.cpp" "pffft/*.cpp" "fft_mt_r2iq/*.cpp" "dsp/*.cpp")
+
+if(MSVC)
+  file(GLOB ARCH_SRC "arch/win32/*.cpp" "arch/win32/CyAPI/*.cpp")
+else()
+  file(GLOB ARCH_SRC "arch/linux/*.c" "arch/linux/*.cpp")
+endif()
+list(APPEND SRC ${ARCH_SRC})
 
 if (MSVC)
     # Assume Windows/x86 target ;)
@@ -49,18 +56,16 @@ target_include_directories(SDDC_CORE PUBLIC "${LIBFFTW_INCLUDE_DIRS}")
 target_link_directories(SDDC_CORE PUBLIC "${LIBFFTW_LIBRARY_DIRS}")
 target_link_libraries(SDDC_CORE PUBLIC ${LIBFFTW_LIBRARIES})
 
-target_include_directories(SDDC_CORE PUBLIC "${LIBUSB_INCLUDE_DIRS}")
-target_link_directories(SDDC_CORE PUBLIC "${LIBUSB_LIBRARY_DIRS}")
-target_link_libraries(SDDC_CORE PUBLIC ${LIBUSB_LIBRARIES})
-
 if (NOT USE_SIMD_OPTIMIZATIONS)
    target_compile_definitions(SDDC_CORE PRIVATE NO_SIMD_OPTIM)
 endif()
 
 if(MSVC)
+  # The native Windows backend uses Cypress CyUSB/CyAPI. This preserves the
+  # RX888 bootloader/firmware transition without requiring Zadig or WinUSB.
   target_link_libraries(SDDC_CORE PUBLIC Setupapi.lib)
-else(MSVC)
+else()
   target_include_directories(SDDC_CORE PUBLIC "${LIBUSB_INCLUDE_DIRS}")
   target_link_directories(SDDC_CORE PUBLIC "${LIBUSB_LIBRARY_DIRS}")
   target_link_libraries(SDDC_CORE PUBLIC ${LIBUSB_LIBRARIES})
-endif(MSVC)
+endif()

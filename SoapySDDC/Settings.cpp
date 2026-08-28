@@ -1,5 +1,6 @@
 #include "SoapySDDC.hpp"
 
+#include <algorithm>
 #include <sys/types.h>
 #include <cstdint>
 #include <cstring>
@@ -47,11 +48,13 @@ SoapySDDC::SoapySDDC(uint8_t dev_index): deviceId(dev_index),
 {
     TracePrintln(TAG, "%d", dev_index);
     vector<SDDC::DeviceItem> devices = RadioHandler::GetDeviceList();
-    if (dev_index >= devices.size())
+    const auto selected = std::find_if(devices.begin(), devices.end(),
+        [dev_index](const SDDC::DeviceItem& device) { return device.index == dev_index; });
+    if (selected == devices.end())
         throw std::runtime_error("SDDC device index is no longer available");
 
     radio_handler = new RadioHandler();
-    const sddc_err_t init_result = radio_handler->Init(devices[dev_index]);
+    const sddc_err_t init_result = radio_handler->Init(*selected);
     if (init_result != ERR_SUCCESS)
     {
         delete radio_handler;

@@ -53,13 +53,20 @@ or
 > cmake --build build/ --config RelWithDebInfo
 ```
 
-* If you are running **64bit** OS, you need to run the following different commands instead of "cmake .." based on your Visual Studio Version:
+* For a **64-bit** Windows build, select the x64 platform for your Visual Studio version:
 ```
-VS2022: >cmake .. -G "Visual Studio 17 2022" -A Win32
-VS2019: >cmake .. -G "Visual Studio 16 2019" -A Win32
-VS2017: >cmake .. -G "Visual Studio 15 2017 Win32"
-VS2015: >cmake .. -G "Visual Studio 14 2015 Win32"
+VS2022: >cmake -S . -B build-x64 -G "Visual Studio 17 2022" -A x64
+VS2019: >cmake -S . -B build-x64 -G "Visual Studio 16 2019" -A x64
 ```
+
+### Windows RX888 USB driver
+
+Windows builds use the native Cypress CyUSB/CyAPI backend for device discovery,
+embedded-firmware upload, re-enumeration, control, and streaming. Install the
+Cypress CyUSB driver for both the FX3 bootloader (`04B4:00F3`) and the
+post-firmware streamer (`04B4:00F1`). Do not replace either interface with
+WinUSB/libusbK through Zadig. `SDDCSupport.dll` does not require
+`libusb-1.0.dll` on Windows.
 
 ### Linux
 
