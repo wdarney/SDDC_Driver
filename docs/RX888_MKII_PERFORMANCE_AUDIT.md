@@ -64,7 +64,7 @@ Release keeps precise floating-point semantics and now requests MSVC `/O2`, `/Ob
 The GitHub Windows x64 job now publishes `SDDCSupport.dll` as its own artifact. A local MSVC build should use:
 
 ```powershell
-cmake -S . -B build-x64 -G "Visual Studio 17 2022" -A x64 `
+cmake -S . -B build-x64 -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build-x64 --config Release --target SDDCSupport
 ```

@@ -53,10 +53,11 @@ or
 > cmake --build build/ --config RelWithDebInfo
 ```
 
-* For a **64-bit** Windows build, select the x64 platform for your Visual Studio version:
+* For a **64-bit** Windows build, select the x64 platform. CMake will use the
+  installed Visual Studio version:
 ```
-VS2022: >cmake -S . -B build-x64 -G "Visual Studio 17 2022" -A x64
-VS2019: >cmake -S . -B build-x64 -G "Visual Studio 16 2019" -A x64
+>cmake -S . -B build-x64 -A x64
+>cmake --build build-x64 --config Release --target SDDCSupport
 ```
 
 ### Windows RX888 USB driver

@@ -65,7 +65,9 @@ jobs:
       # Note the current convention is to use the -S and -B options here to specify source
       # and build directories, but this is only available with CMake 3.13 and higher.
       # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -G "Visual Studio 17 2022" -A Win32
+      # Let CMake select the Visual Studio version installed on the runner.
+      # Pinning VS 2022 breaks as hosted Windows images move to newer releases.
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A Win32
 
     - uses: actions/download-artifact@v4
       with:
@@ -83,7 +85,7 @@ jobs:
     - name: Configure CMake64
       shell: bash
       working-directory: ${{runner.workspace}}/build64
-      run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -G "Visual Studio 17 2022" -A x64
+      run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
 
     - name: Build
       working-directory: ${{runner.workspace}}/build64
