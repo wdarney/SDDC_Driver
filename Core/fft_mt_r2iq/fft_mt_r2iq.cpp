@@ -12,6 +12,9 @@ The name fft_mt_r2iq stands for Fast Fourier Transform, Multi-Threaded, Real to 
 */
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
