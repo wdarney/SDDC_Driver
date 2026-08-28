@@ -44,17 +44,12 @@ jobs:
     # cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     runs-on: windows-2025
-    needs: build-firmware
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Install vcpkg dependencies
       run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
-
-    - uses: actions/download-artifact@v4
-      with:
-        name: firmware
 
     - name: Create x64 build environment
       run: cmake -E make_directory ${{runner.workspace}}/build64
