@@ -275,32 +275,43 @@ sddc_err_t RadioHandler::SetDecimation(uint8_t decimate)
 sddc_err_t RadioHandler::Start(bool convert_r2iq)
 {
 	TracePrintln(TAG, "%s", convert_r2iq ? "true" : "false");
+	WarnPrintln(TAG, "STARTUP 1/7: RadioHandler::Start entered");
 
 	// Stop the stream if it was already running
 	sddc_err_t ret = Stop();
 	if(ret != ERR_SUCCESS) return ret;
-
-	streamRunning = true;
+	WarnPrintln(TAG, "STARTUP 2/7: previous stream is stopped");
 
 	// SDR starts sending frames
 	ret = hardware->StartStream();
-	if(ret != ERR_SUCCESS) return ret;
+	if(ret != ERR_SUCCESS)
+	{
+		ErrorPrintln(TAG, "STARTUP failed: hardware START command returned %d", static_cast<int>(ret));
+		return ret;
+	}
+	WarnPrintln(TAG, "STARTUP 3/7: hardware START command completed");
+
+	streamRunning = true;
 
 	//iq_buffer.setBlockSize(EXT_BLOCKLEN * sizeof(float));
 
 	r2iqEnabled = convert_r2iq;
 	if(r2iqEnabled) r2iqCntrl->TurnOn();
+	WarnPrintln(TAG, "STARTUP 4/7: R2IQ worker started");
 
 	// Driver starts receiving frames
 	fx3->StartStream(real_buffer);
+	WarnPrintln(TAG, "STARTUP 5/7: Cypress receive worker started");
 
 	submit_thread = std::thread([this]() {
 		this->OnDataPacket();
 	});
+	WarnPrintln(TAG, "STARTUP 6/7: output worker started");
 
 	show_stats_thread = std::thread([this](void*) {
 		this->CaculateStats();
 	}, nullptr);
+	WarnPrintln(TAG, "STARTUP 7/7: RadioHandler::Start completed");
 
 	return ERR_SUCCESS;
 }
@@ -321,14 +332,14 @@ sddc_err_t RadioHandler::Stop()
 
 		// First finish the output data thread
 		// to avoid it being stuck waiting for new data
-		submit_thread.join();
+		if (submit_thread.joinable()) submit_thread.join();
 
 		// Then we continue shutting down components in reverse order
 		r2iqCntrl->TurnOff();
 		fx3->StopStream();
 		DebugPrintln(TAG, "Signal pipeline stopped");
 
-		show_stats_thread.join();
+		if (show_stats_thread.joinable()) show_stats_thread.join();
 		DebugPrintln(TAG, "Stat thread finished");
 
 		// Disable stream on the SDR

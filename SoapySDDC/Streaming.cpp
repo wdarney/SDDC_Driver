@@ -39,6 +39,7 @@ SoapySDR::Stream *SoapySDDC::setupStream(const int direction,
                                          const std::vector<size_t> &channels,
                                          const SoapySDR::Kwargs&)
 {
+    SoapySDR_log(SOAPY_SDR_INFO, "SDDC startup 1/2: setupStream entered");
     TracePrintln(TAG, "%d, %s, *, *", direction, format.c_str());
 
     if (direction != SOAPY_SDR_RX)
@@ -77,7 +78,7 @@ SoapySDR::Stream *SoapySDDC::setupStream(const int direction,
     for (auto &buff : samples_buffer)
         buff.resize(bufferLength * bytesPerSample);
 
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    SoapySDR_log(SOAPY_SDR_INFO, "SDDC startup 2/2: setupStream completed");
     return (SoapySDR::Stream *)this;
 }
 
@@ -101,7 +102,17 @@ int SoapySDDC::activateStream(SoapySDR::Stream*,
     TracePrintln(TAG, "*, *, *, *");
     resetBuffer = true;
     bufferedElems = 0;
-    radio_handler->Start(true);
+
+    SoapySDR_log(SOAPY_SDR_INFO, "SDDC activation: entering RadioHandler::Start");
+    const sddc_err_t result = radio_handler->Start(true);
+    if (result != ERR_SUCCESS)
+    {
+        SoapySDR_logf(SOAPY_SDR_ERROR,
+                      "SDDC activation failed: RadioHandler::Start returned %d",
+                      static_cast<int>(result));
+        return SOAPY_SDR_STREAM_ERROR;
+    }
+    SoapySDR_log(SOAPY_SDR_INFO, "SDDC activation: RadioHandler::Start completed");
 
     return 0;
 }

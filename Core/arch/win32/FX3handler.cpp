@@ -334,6 +334,7 @@ void fx3handler::CleanupDataXfer(void** context)
 
 void fx3handler::AdcSamplesProcess()
 {
+    WarnPrintln(TAG, "STARTUP USB 1/3: Cypress receive thread entered");
     std::array<std::vector<uint8_t>, USB_READ_CONCURRENT> buffers;
     std::array<void*, USB_READ_CONCURRENT> contexts {};
     for (size_t i = 0; i < USB_READ_CONCURRENT; ++i) {
@@ -345,9 +346,22 @@ void fx3handler::AdcSamplesProcess()
         }
     }
 
+    if (!run.load()) {
+        if (endpoint != nullptr) endpoint->Abort();
+        for (auto& context : contexts) CleanupDataXfer(&context);
+        return;
+    }
+    WarnPrintln(TAG, "STARTUP USB 2/3: initial Cypress transfers queued");
+
     size_t read_index = 0;
+    bool first_transfer = true;
     while (run.load()) {
         if (!FinishDataXfer(&contexts[read_index])) break;
+
+        if (first_transfer) {
+            WarnPrintln(TAG, "STARTUP USB 3/3: first Cypress transfer completed");
+            first_transfer = false;
+        }
 
         int16_t* destination = inputbuffer != nullptr ? inputbuffer->acquireWriteBlock() : nullptr;
         if (destination == nullptr) break;
@@ -369,6 +383,7 @@ void fx3handler::AdcSamplesProcess()
 void fx3handler::StartStream(ringbuffer<int16_t>& input)
 {
     if (run.exchange(true)) return;
+    WarnPrintln(TAG, "Starting Cypress receive thread");
     inputbuffer = &input;
     inputbuffer->setBlockSize(transferSamples);
     adc_samples_thread = std::thread([this] { AdcSamplesProcess(); });
