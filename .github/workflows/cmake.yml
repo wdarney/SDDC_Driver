@@ -65,6 +65,16 @@ jobs:
       shell: bash
       run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
 
+    - name: Build x64 R2IQ tests
+      working-directory: ${{runner.workspace}}/build64
+      shell: bash
+      run: cmake --build . --config $BUILD_TYPE --target unittest
+
+    - name: Run x64 R2IQ tests
+      working-directory: ${{runner.workspace}}/build64
+      shell: bash
+      run: ctest -C $BUILD_TYPE -R "CoreFixture_(R2IQTest|R2IQTonePurityTest)" --output-on-failure
+
     - uses: actions/upload-artifact@v4
       with:
         name: SDDCSupport-Windows-x64

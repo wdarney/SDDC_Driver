@@ -54,10 +54,14 @@
                 inputbuffer->releaseReadBlock();
                 return 0;
             }
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first output block acquired");
             // The former vector<float>(size) value-initialized every output
             // block. Some high-decimation offset paths do not overwrite every
             // element, so preserve those zero-filled gaps when reusing blocks.
             std::fill_n(iq_output, outputbuffer->getBlockSize(), 0.0f);
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first output block cleared");
         }
 
         // @todo: move the following int16_t conversion to (32-bit) float
@@ -74,6 +78,8 @@
                 /*dest=*/th->ADCinTime,
                 /*len=*/BASE_FFT_SCRAP_SIZE
             );
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first overlap converted");
 #if PRINT_INPUT_RANGE
             auto minmax = std::minmax_element(input_current_block, input_current_block + inputbuffer_block_size);
             blockMinMax.first = *minmax.first;
@@ -84,6 +90,8 @@
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
             );
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first input payload converted");
         }
         else
         {
@@ -92,11 +100,15 @@
                 /*dest=*/th->ADCinTime,
                 /*len=*/BASE_FFT_SCRAP_SIZE
             );
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first randomized overlap converted");
             convert_float<true>(
                 /*source=*/input_current_block,
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
             );
+            if (first_input_block)
+                WarnPrintln(TAG, "STARTUP DSP: first randomized input payload converted");
         }
 
         std::copy_n(
@@ -104,6 +116,8 @@
             BASE_FFT_SCRAP_SIZE,
             last_block_end.data()
         );
+        if (first_input_block)
+            WarnPrintln(TAG, "STARTUP DSP: first overlap history saved");
         if (first_input_block) {
             WarnPrintln(TAG, "STARTUP DSP: first input block converted");
             first_input_block = false;

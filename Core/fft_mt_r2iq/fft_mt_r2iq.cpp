@@ -26,6 +26,8 @@ The name fft_mt_r2iq stands for Fast Fourier Transform, Multi-Threaded, Real to 
 #include "../fir.h"
 
 #include <assert.h>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 #define TAG "fft_mt_r2iq"
@@ -385,6 +387,34 @@ void * fft_mt_r2iq::r2iqThreadf(r2iqThreadArg *th)
 	}
 
 	DebugPrintln(TAG, "Hardware Capability: AVX:%s AVX2:%s AVX512:%s\n", HW_AVX ? "yes" : "no", HW_AVX2 ? "yes" : "no", HW_AVX512F ? "yes" : "no");
+
+	// Keep the normal best-supported dispatch, but allow one installed DLL to
+	// isolate CPU-kernel failures on a target machine without another rebuild.
+	// The override is deliberately opt-in and does not weaken the default AVX2
+	// path used by native Windows x64 systems.
+	if (const char* forcedSimd = std::getenv("SDDC_SIMD")) {
+		if (std::strcmp(forcedSimd, "generic") == 0) {
+			WarnPrintln(TAG, "STARTUP DSP: forced generic kernel by SDDC_SIMD");
+			return r2iqThreadf_generic(th);
+		}
+		if (std::strcmp(forcedSimd, "avx") == 0) {
+			if (!HW_AVX) {
+				WarnPrintln(TAG, "STARTUP DSP: SDDC_SIMD=avx unavailable; using generic kernel");
+				return r2iqThreadf_generic(th);
+			}
+			WarnPrintln(TAG, "STARTUP DSP: forced AVX kernel by SDDC_SIMD");
+			return r2iqThreadf_avx(th);
+		}
+		if (std::strcmp(forcedSimd, "avx2") == 0) {
+			if (!HW_AVX2) {
+				WarnPrintln(TAG, "STARTUP DSP: SDDC_SIMD=avx2 unavailable; using generic kernel");
+				return r2iqThreadf_generic(th);
+			}
+			WarnPrintln(TAG, "STARTUP DSP: forced AVX2 kernel by SDDC_SIMD");
+			return r2iqThreadf_avx2(th);
+		}
+		WarnPrintln(TAG, "STARTUP DSP: ignoring unknown SDDC_SIMD value '%s'", forcedSimd);
+	}
 
 	if (HW_AVX512F) {
 		WarnPrintln(TAG, "STARTUP DSP: selected AVX-512 kernel");
