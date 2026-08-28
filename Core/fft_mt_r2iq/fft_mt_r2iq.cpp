@@ -11,6 +11,10 @@ The name fft_mt_r2iq stands for Fast Fourier Transform, Multi-Threaded, Real to 
 
 */
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "fft_mt_r2iq.h"
 #include "../config.h"
 #include "fftw3.h"
@@ -275,7 +279,6 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 
 #ifdef _WIN32
 	//  Windows, assumed MSVC
-	#include <windows.h>
 	#include <intrin.h>
 	#define cpuid(info, x)    __cpuidex(info, x, 0)
 	#define read_xcr0()       _xgetbv(0)
