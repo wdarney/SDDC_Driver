@@ -1,0 +1,49 @@
+name: Windows CyAPI Baseline
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          Set-Location C:\vcpkg
+          git pull
+          vcpkg install soapysdr:x64-windows
+
+      - name: Configure x64 module
+        shell: pwsh
+        run: |
+          cmake -S "$env:GITHUB_WORKSPACE" -B "$env:RUNNER_TEMP\sddc-build64" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release -A x64
+
+      - name: Build x64 SDDCSupport
+        shell: pwsh
+        run: |
+          cmake --build "$env:RUNNER_TEMP\sddc-build64" --config Release --target SDDCSupport
+
+      - name: Locate SDDCSupport
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:RUNNER_TEMP\sddc-build64" -Recurse -Filter SDDCSupport.dll | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Stage SDDCSupport
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "$env:RUNNER_TEMP\sddc-build64" -Recurse -Filter SDDCSupport.dll | Select-Object -First 1
+          if (-not $dll) { throw "SDDCSupport.dll not found" }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\artifact" | Out-Null
+          Copy-Item $dll.FullName "$env:RUNNER_TEMP\artifact\SDDCSupport.dll"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-RenardSpark-CyAPI-Windows-x64
+          path: ${{ runner.temp }}/artifact/SDDCSupport.dll
