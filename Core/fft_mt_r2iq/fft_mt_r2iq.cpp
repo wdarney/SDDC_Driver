@@ -11,13 +11,6 @@ The name fft_mt_r2iq stands for Fast Fourier Transform, Multi-Threaded, Real to 
 
 */
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 #include "fft_mt_r2iq.h"
 #include "../config.h"
 #include "fftw3.h"
@@ -26,8 +19,6 @@ The name fft_mt_r2iq stands for Fast Fourier Transform, Multi-Threaded, Real to 
 #include "../fir.h"
 
 #include <assert.h>
-#include <cstdlib>
-#include <cstring>
 #include <utility>
 
 #define TAG "fft_mt_r2iq"
@@ -121,13 +112,8 @@ float fft_mt_r2iq::setFreqOffset(float offset)
 	if(offset > 1) offset = 1;
 	if(offset < 0) offset = 0;
 
-	// The bin must satisfy both the 4-bin SIMD alignment and phase continuity
-	// across the 4/5-FFT input advance. Their least common multiple is 20.
-	constexpr int tuning_bin_alignment = 20;
-	this->center_frequency_bin = static_cast<int>(
-		(offset * BASE_FFT_HALF_SIZE + tuning_bin_alignment / 2) /
-		tuning_bin_alignment) * tuning_bin_alignment;
-	this->center_frequency_bin = std::min(this->center_frequency_bin, BASE_FFT_HALF_SIZE);
+	// Round to nearest multiple of 4 bins for better performance with SIMD operations
+	this->center_frequency_bin = int(offset * BASE_FFT_HALF_SIZE / 4) * 4;
 
 	float delta = ((float)this->center_frequency_bin / BASE_FFT_HALF_SIZE) - offset;
 	float ret = delta * getRatio(); // ret increases with higher decimation
@@ -187,11 +173,10 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 	this->GainScale = gain;
 	DebugPrintln(TAG, "Hardware gain : %.12f", this->GainScale);
 
-	// Each FFT consumes one non-overlapping advance from the current input block;
-	// the required history is prepended separately in fft_mt_r2iq_impl.h.
-	const int fft_input_advance = BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE;
-	assert(inputbuffer_block_size % fft_input_advance == 0);
-	ffts_per_blocks = inputbuffer_block_size / fft_input_advance;
+	// number of ffts needed to process one full buffer block
+	// including an overlap with the previous samples (required by the overlap-save method)
+	// Historically there was a "+ 1" here, but it triggers a rather catastrophic memory leak
+	ffts_per_blocks = inputbuffer_block_size / (BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE)+1;
 	DebugPrintln(TAG, "Number of FFTs per blocks : %d", ffts_per_blocks);
 	DebugPrintln(TAG, "Effective FFT conversion : %d", ffts_per_blocks * (BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE));
 
@@ -286,35 +271,11 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 	//  Windows, assumed MSVC
 	#include <intrin.h>
 	#define cpuid(info, x)    __cpuidex(info, x, 0)
-	#define read_xcr0()       _xgetbv(0)
 	#define DETECT_AVX
-
-	static bool running_x64_on_arm64_windows()
-	{
-		using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
-		const auto kernel = GetModuleHandleW(L"kernel32.dll");
-		if (kernel == nullptr) return false;
-
-		const auto isWow64Process2 = reinterpret_cast<IsWow64Process2Fn>(
-			GetProcAddress(kernel, "IsWow64Process2"));
-		if (isWow64Process2 == nullptr) return false;
-
-		USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
-		USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
-		return isWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine) &&
-			nativeMachine == IMAGE_FILE_MACHINE_ARM64;
-	}
 #elif defined(__x86_64__)
 	//  GCC Intrinsics, x86 only
 	#include <cpuid.h>
 	#define cpuid(info, x)  __cpuid_count(x, 0, info[0], info[1], info[2], info[3])
-	static unsigned long long read_xcr0()
-	{
-		unsigned int eax = 0;
-		unsigned int edx = 0;
-		__asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
-		return (static_cast<unsigned long long>(edx) << 32) | eax;
-	}
 	#define DETECT_AVX
 #elif defined(__arm__) || defined(__aarch64__)
 	#define DETECT_NEON
@@ -347,91 +308,35 @@ void * fft_mt_r2iq::r2iqThreadf(r2iqThreadArg *th)
 	return r2iqThreadf_generic(th);
 #else
 #if defined(DETECT_AVX)
-	#ifdef _WIN32
-	// Windows-on-ARM can expose x64 CPUID feature bits that are not safe for
-	// this module's hand-compiled AVX kernels.  Keep native x64 dispatch intact,
-	// but use the generic kernel when the x64 DLL is running under ARM64
-	// emulation (for example, Windows 11 in Parallels on Apple Silicon).
-	if (running_x64_on_arm64_windows()) {
-		WarnPrintln(TAG, "STARTUP DSP: selected generic kernel for Windows ARM64 host");
-		return r2iqThreadf_generic(th);
-	}
-	#endif
-
 	int info[4];
 	bool HW_AVX = false;
 	bool HW_AVX2 = false;
 	bool HW_AVX512F = false;
-	bool OS_AVX = false;
-	bool OS_AVX512 = false;
 
 	cpuid(info, 0);
 	int nIds = info[0];
 
 	if (nIds >= 0x00000001){
 		cpuid(info,0x00000001);
-		const bool cpuAvx = (info[2] & ((int)1 << 28)) != 0;
-		const bool osxsave = (info[2] & ((int)1 << 27)) != 0;
-		if (cpuAvx && osxsave) {
-			const unsigned long long xcr0 = read_xcr0();
-			OS_AVX = (xcr0 & 0x6) == 0x6;
-			OS_AVX512 = (xcr0 & 0xe6) == 0xe6;
-		}
-		HW_AVX = cpuAvx && OS_AVX;
+		HW_AVX    = (info[2] & ((int)1 << 28)) != 0;
 	}
 	if (nIds >= 0x00000007){
 		cpuid(info,0x00000007);
-		HW_AVX2   = OS_AVX && (info[1] & ((int)1 <<  5)) != 0;
+		HW_AVX2   = (info[1] & ((int)1 <<  5)) != 0;
 
-		HW_AVX512F = OS_AVX512 && (info[1] & ((int)1 << 16)) != 0;
+		HW_AVX512F     = (info[1] & ((int)1 << 16)) != 0;
 	}
 
 	DebugPrintln(TAG, "Hardware Capability: AVX:%s AVX2:%s AVX512:%s\n", HW_AVX ? "yes" : "no", HW_AVX2 ? "yes" : "no", HW_AVX512F ? "yes" : "no");
 
-	// Keep the normal best-supported dispatch, but allow one installed DLL to
-	// isolate CPU-kernel failures on a target machine without another rebuild.
-	// The override is deliberately opt-in and does not weaken the default AVX2
-	// path used by native Windows x64 systems.
-	if (const char* forcedSimd = std::getenv("SDDC_SIMD")) {
-		if (std::strcmp(forcedSimd, "generic") == 0) {
-			WarnPrintln(TAG, "STARTUP DSP: forced generic kernel by SDDC_SIMD");
-			return r2iqThreadf_generic(th);
-		}
-		if (std::strcmp(forcedSimd, "avx") == 0) {
-			if (!HW_AVX) {
-				WarnPrintln(TAG, "STARTUP DSP: SDDC_SIMD=avx unavailable; using generic kernel");
-				return r2iqThreadf_generic(th);
-			}
-			WarnPrintln(TAG, "STARTUP DSP: forced AVX kernel by SDDC_SIMD");
-			return r2iqThreadf_avx(th);
-		}
-		if (std::strcmp(forcedSimd, "avx2") == 0) {
-			if (!HW_AVX2) {
-				WarnPrintln(TAG, "STARTUP DSP: SDDC_SIMD=avx2 unavailable; using generic kernel");
-				return r2iqThreadf_generic(th);
-			}
-			WarnPrintln(TAG, "STARTUP DSP: forced AVX2 kernel by SDDC_SIMD");
-			return r2iqThreadf_avx2(th);
-		}
-		WarnPrintln(TAG, "STARTUP DSP: ignoring unknown SDDC_SIMD value '%s'", forcedSimd);
-	}
-
-	if (HW_AVX512F) {
-		WarnPrintln(TAG, "STARTUP DSP: selected AVX-512 kernel");
+	if (HW_AVX512F)
 		return r2iqThreadf_avx512(th);
-	}
-	else if (HW_AVX2) {
-		WarnPrintln(TAG, "STARTUP DSP: selected AVX2 kernel");
+	else if (HW_AVX2)
 		return r2iqThreadf_avx2(th);
-	}
-	else if (HW_AVX) {
-		WarnPrintln(TAG, "STARTUP DSP: selected AVX kernel");
+	else if (HW_AVX)
 		return r2iqThreadf_avx(th);
-	}
-	else {
-		WarnPrintln(TAG, "STARTUP DSP: selected generic x64 kernel");
+	else
 		return r2iqThreadf_generic(th);
-	}
 #elif defined(DETECT_NEON)
 	bool NEON = detect_neon();
 	DebugPrintln(TAG, "Hardware Capability: NEON:%d\n", NEON);

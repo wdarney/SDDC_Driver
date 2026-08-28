@@ -3,7 +3,6 @@
 #include "fftw3.h"
 #include "../config.h"
 #include <algorithm>
-#include <cassert>
 #include <string.h>
 #include <thread>
 #include <mutex>
