@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -26,9 +27,18 @@ constexpr int REENUMERATION_DELAY_MS = 250;
 struct ReadContext {
     PUCHAR cy_context = nullptr;
     OVERLAPPED overlap {};
+    // CyAPI's XMODE_DIRECT contract writes a SINGLE_TRANSFER immediately after
+    // the caller-provided OVERLAPPED (see CCyUSBEndPoint::BeginDirectXfer).
+    // This field is required storage, even though our code never reads it
+    // directly.  Omitting it lets CyAPI overwrite buffer and size below.
+    SINGLE_TRANSFER transfer {};
     uint8_t* buffer = nullptr;
     long size = 0;
 };
+
+static_assert(offsetof(ReadContext, transfer) ==
+              offsetof(ReadContext, overlap) + sizeof(OVERLAPPED),
+              "CyAPI direct-transfer storage must immediately follow OVERLAPPED");
 
 std::string narrow(const wchar_t* value)
 {
