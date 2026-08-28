@@ -275,13 +275,38 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 
 #ifdef _WIN32
 	//  Windows, assumed MSVC
+	#include <windows.h>
 	#include <intrin.h>
 	#define cpuid(info, x)    __cpuidex(info, x, 0)
+	#define read_xcr0()       _xgetbv(0)
 	#define DETECT_AVX
+
+	static bool running_x64_on_arm64_windows()
+	{
+		using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+		const auto kernel = GetModuleHandleW(L"kernel32.dll");
+		if (kernel == nullptr) return false;
+
+		const auto isWow64Process2 = reinterpret_cast<IsWow64Process2Fn>(
+			GetProcAddress(kernel, "IsWow64Process2"));
+		if (isWow64Process2 == nullptr) return false;
+
+		USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+		USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+		return isWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine) &&
+			nativeMachine == IMAGE_FILE_MACHINE_ARM64;
+	}
 #elif defined(__x86_64__)
 	//  GCC Intrinsics, x86 only
 	#include <cpuid.h>
 	#define cpuid(info, x)  __cpuid_count(x, 0, info[0], info[1], info[2], info[3])
+	static unsigned long long read_xcr0()
+	{
+		unsigned int eax = 0;
+		unsigned int edx = 0;
+		__asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
+		return (static_cast<unsigned long long>(edx) << 32) | eax;
+	}
 	#define DETECT_AVX
 #elif defined(__arm__) || defined(__aarch64__)
 	#define DETECT_NEON
@@ -314,23 +339,43 @@ void * fft_mt_r2iq::r2iqThreadf(r2iqThreadArg *th)
 	return r2iqThreadf_generic(th);
 #else
 #if defined(DETECT_AVX)
+	#ifdef _WIN32
+	// Windows-on-ARM can expose x64 CPUID feature bits that are not safe for
+	// this module's hand-compiled AVX kernels.  Keep native x64 dispatch intact,
+	// but use the generic kernel when the x64 DLL is running under ARM64
+	// emulation (for example, Windows 11 in Parallels on Apple Silicon).
+	if (running_x64_on_arm64_windows()) {
+		DebugPrintln(TAG, "Windows ARM64 host detected: x64 AVX kernels disabled\n");
+		return r2iqThreadf_generic(th);
+	}
+	#endif
+
 	int info[4];
 	bool HW_AVX = false;
 	bool HW_AVX2 = false;
 	bool HW_AVX512F = false;
+	bool OS_AVX = false;
+	bool OS_AVX512 = false;
 
 	cpuid(info, 0);
 	int nIds = info[0];
 
 	if (nIds >= 0x00000001){
 		cpuid(info,0x00000001);
-		HW_AVX    = (info[2] & ((int)1 << 28)) != 0;
+		const bool cpuAvx = (info[2] & ((int)1 << 28)) != 0;
+		const bool osxsave = (info[2] & ((int)1 << 27)) != 0;
+		if (cpuAvx && osxsave) {
+			const unsigned long long xcr0 = read_xcr0();
+			OS_AVX = (xcr0 & 0x6) == 0x6;
+			OS_AVX512 = (xcr0 & 0xe6) == 0xe6;
+		}
+		HW_AVX = cpuAvx && OS_AVX;
 	}
 	if (nIds >= 0x00000007){
 		cpuid(info,0x00000007);
-		HW_AVX2   = (info[1] & ((int)1 <<  5)) != 0;
+		HW_AVX2   = OS_AVX && (info[1] & ((int)1 <<  5)) != 0;
 
-		HW_AVX512F     = (info[1] & ((int)1 << 16)) != 0;
+		HW_AVX512F = OS_AVX512 && (info[1] & ((int)1 << 16)) != 0;
 	}
 
 	DebugPrintln(TAG, "Hardware Capability: AVX:%s AVX2:%s AVX512:%s\n", HW_AVX ? "yes" : "no", HW_AVX2 ? "yes" : "no", HW_AVX512F ? "yes" : "no");
