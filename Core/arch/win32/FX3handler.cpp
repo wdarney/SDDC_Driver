@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -35,6 +36,7 @@ struct ReadContext {
     SINGLE_TRANSFER transfer {};
     uint8_t* buffer = nullptr;
     long size = 0;
+    bool buffered = false;
 };
 
 static_assert(offsetof(ReadContext, transfer) ==
@@ -195,6 +197,12 @@ bool fx3handler::Open(SDDC::DeviceItem selector)
         return false;
     }
 
+    if (const char* usbMode = std::getenv("SDDC_USB_MODE");
+        usbMode != nullptr && std::strcmp(usbMode, "buffered") == 0) {
+        endpoint->XferMode = XMODE_BUFFERED;
+        WarnPrintln(TAG, "Using Cypress buffered transfers by SDDC_USB_MODE");
+    }
+
     endpoint->SetXferSize(transferSize);
     uint32_t hardware_info = 0;
     if (!GetHardwareInfo(&hardware_info)) {
@@ -320,6 +328,7 @@ bool fx3handler::BeginDataXfer(uint8_t* buffer, long size, void** context)
 
     read->buffer = buffer;
     read->size = size;
+    read->buffered = endpoint->XferMode == XMODE_BUFFERED;
     read->cy_context = endpoint->BeginDataXfer(buffer, size, &read->overlap);
     return read->cy_context != nullptr && endpoint->NtStatus == 0 && endpoint->UsbdStatus == 0;
 }
@@ -334,7 +343,13 @@ bool fx3handler::FinishDataXfer(void** context)
     }
 
     long actual = read->size;
-    if (!endpoint->FinishDataXfer(read->buffer, actual, &read->overlap, read->cy_context)) return false;
+    const bool finished = endpoint->FinishDataXfer(
+        read->buffer, actual, &read->overlap, read->cy_context);
+    if (read->buffered) {
+        delete[] read->cy_context;
+        read->cy_context = nullptr;
+    }
+    if (!finished) return false;
     if (actual != read->size) {
         WarnPrintln(TAG, "Short USB transfer: received %ld of %ld bytes", actual, read->size);
         return false;
@@ -346,6 +361,10 @@ void fx3handler::CleanupDataXfer(void** context)
 {
     if (context == nullptr || *context == nullptr) return;
     auto* read = static_cast<ReadContext*>(*context);
+    if (read->buffered && read->cy_context != nullptr) {
+        delete[] read->cy_context;
+        read->cy_context = nullptr;
+    }
     if (read->overlap.hEvent != nullptr) CloseHandle(read->overlap.hEvent);
     delete read;
     *context = nullptr;
