@@ -25,6 +25,7 @@
 
     float* iq_output = nullptr;
     size_t output_buffer_offset = 0;
+    [[maybe_unused]] const size_t output_complex_capacity = outputbuffer->getBlockSize() / 2;
 
     const int16_t* input_current_block = nullptr;
     // Fixed overlap storage avoids constructing a vector on every input block.
@@ -203,28 +204,30 @@
             //    with fine mixer - modifying the mixer frequency? (fs - fc)/fs
             //    (this would reduce one memory pass)
 
-            size_t len = (k+1) * fft_useful_size + output_buffer_offset > 32768 ? 32768 - (k * fft_useful_size + output_buffer_offset) : fft_useful_size;
+            const size_t destination_offset = output_buffer_offset +
+                static_cast<size_t>(k) * fft_useful_size;
+            assert(destination_offset + fft_useful_size <= output_complex_capacity);
 
             if (this->getSideband()) // lower sideband
             {
                 // mirror just by negating the imaginary Q of complex I/Q
-                copy<true>((fftwf_complex*)&iq_output[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
+                copy<true>((fftwf_complex*)&iq_output[destination_offset * 2],
+                    &th->inFreqTmp[0], fft_useful_size);
             }
             else // upper sideband
             {
-                copy<false>((fftwf_complex*)&iq_output[(k * fft_useful_size + output_buffer_offset)*2], &th->inFreqTmp[0], len);
+                copy<false>((fftwf_complex*)&iq_output[destination_offset * 2],
+                    &th->inFreqTmp[0], fft_useful_size);
             }
         }
 
+        output_buffer_offset += static_cast<size_t>(ffts_per_blocks) * fft_useful_size;
         decimate_count = (decimate_count + 1) & (deci_ratio - 1);
         if (decimate_count == 0) {
+            assert(output_buffer_offset == output_complex_capacity);
             outputbuffer->commitWriteBlock();
             iq_output = nullptr;
             output_buffer_offset = 0;
-        }
-        else
-        {
-            output_buffer_offset += fft_output_half_size + fft_useful_size * (ffts_per_blocks-1);
         }
 
         inputbuffer->releaseReadBlock();
