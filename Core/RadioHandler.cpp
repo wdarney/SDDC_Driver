@@ -41,6 +41,7 @@ void RadioHandler::OnDataPacket()
 {
 	auto len_real = real_buffer.getBlockSize();
 	auto len_iq   = iq_buffer.getBlockSize();
+	bool first_iq_block = true;
 
 	//ringbuffer<>* source_buffer = r2iqEnabled ? &outputbuffer : &inputbuffer;
 
@@ -65,6 +66,10 @@ void RadioHandler::OnDataPacket()
 			}
 
 			callbackIQ(callbackIQContext, (sddc_complex_t*)buf, len_iq/2);
+			if (first_iq_block) {
+				WarnPrintln(TAG, "STARTUP DSP: first IQ callback completed");
+				first_iq_block = false;
+			}
 			iq_buffer.releaseReadBlock();
 
 			count_iq_samples += len_iq/2;

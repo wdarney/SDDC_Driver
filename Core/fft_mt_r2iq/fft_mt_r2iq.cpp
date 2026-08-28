@@ -351,7 +351,7 @@ void * fft_mt_r2iq::r2iqThreadf(r2iqThreadArg *th)
 	// but use the generic kernel when the x64 DLL is running under ARM64
 	// emulation (for example, Windows 11 in Parallels on Apple Silicon).
 	if (running_x64_on_arm64_windows()) {
-		DebugPrintln(TAG, "Windows ARM64 host detected: x64 AVX kernels disabled\n");
+		WarnPrintln(TAG, "STARTUP DSP: selected generic kernel for Windows ARM64 host");
 		return r2iqThreadf_generic(th);
 	}
 	#endif
@@ -386,14 +386,22 @@ void * fft_mt_r2iq::r2iqThreadf(r2iqThreadArg *th)
 
 	DebugPrintln(TAG, "Hardware Capability: AVX:%s AVX2:%s AVX512:%s\n", HW_AVX ? "yes" : "no", HW_AVX2 ? "yes" : "no", HW_AVX512F ? "yes" : "no");
 
-	if (HW_AVX512F)
+	if (HW_AVX512F) {
+		WarnPrintln(TAG, "STARTUP DSP: selected AVX-512 kernel");
 		return r2iqThreadf_avx512(th);
-	else if (HW_AVX2)
+	}
+	else if (HW_AVX2) {
+		WarnPrintln(TAG, "STARTUP DSP: selected AVX2 kernel");
 		return r2iqThreadf_avx2(th);
-	else if (HW_AVX)
+	}
+	else if (HW_AVX) {
+		WarnPrintln(TAG, "STARTUP DSP: selected AVX kernel");
 		return r2iqThreadf_avx(th);
-	else
+	}
+	else {
+		WarnPrintln(TAG, "STARTUP DSP: selected generic x64 kernel");
 		return r2iqThreadf_generic(th);
+	}
 #elif defined(DETECT_NEON)
 	bool NEON = detect_neon();
 	DebugPrintln(TAG, "Hardware Capability: NEON:%d\n", NEON);

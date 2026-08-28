@@ -28,6 +28,7 @@
     [[maybe_unused]] const size_t output_complex_capacity = outputbuffer->getBlockSize() / 2;
 
     const int16_t* input_current_block = nullptr;
+    bool first_input_block = true;
     // Fixed overlap storage avoids constructing a vector on every input block.
     std::array<int16_t, BASE_FFT_SCRAP_SIZE> last_block_end{};
 
@@ -41,6 +42,9 @@
             inputbuffer->releaseReadBlock();
             return 0;
         }
+
+        if (first_input_block)
+            WarnPrintln(TAG, "STARTUP DSP: first input block acquired");
 
         if (iq_output == nullptr)
         {
@@ -100,6 +104,10 @@
             BASE_FFT_SCRAP_SIZE,
             last_block_end.data()
         );
+        if (first_input_block) {
+            WarnPrintln(TAG, "STARTUP DSP: first input block converted");
+            first_input_block = false;
+        }
 
 #if PRINT_INPUT_RANGE
         th->MinValue = std::min(blockMinMax.first, th->MinValue);

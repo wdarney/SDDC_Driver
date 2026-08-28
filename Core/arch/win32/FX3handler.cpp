@@ -366,6 +366,7 @@ void fx3handler::AdcSamplesProcess()
 
     size_t read_index = 0;
     bool first_transfer = true;
+    bool first_block = true;
     while (run.load()) {
         if (!FinishDataXfer(&contexts[read_index])) break;
 
@@ -377,11 +378,17 @@ void fx3handler::AdcSamplesProcess()
         int16_t* destination = inputbuffer != nullptr ? inputbuffer->acquireWriteBlock() : nullptr;
         if (destination == nullptr) break;
         std::memcpy(destination, buffers[read_index].data(), transferSize);
+        if (first_block) WarnPrintln(TAG, "STARTUP USB 4/6: first block copied to ring buffer");
         if (!inputbuffer->commitWriteBlock()) break;
+        if (first_block) WarnPrintln(TAG, "STARTUP USB 5/6: first ring-buffer block committed");
 
         if (!BeginDataXfer(buffers[read_index].data(), transferSize, &contexts[read_index])) {
             ErrorPrintln(TAG, "Unable to requeue USB transfer %zu", read_index);
             break;
+        }
+        if (first_block) {
+            WarnPrintln(TAG, "STARTUP USB 6/6: first Cypress request requeued");
+            first_block = false;
         }
         read_index = (read_index + 1) % USB_READ_CONCURRENT;
     }
