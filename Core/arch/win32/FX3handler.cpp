@@ -11,6 +11,7 @@
 #include "../../config.h"
 #include "FX3handler.h"
 #include "CyAPI/CyAPI.h"
+#include "CyAPI/cyioctl.h"
 #include "firmware.h"
 
 namespace {
