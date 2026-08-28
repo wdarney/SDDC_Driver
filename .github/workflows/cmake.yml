@@ -52,72 +52,28 @@ jobs:
     - name: Install vcpkg dependencies
       run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
 
-    - name: Create Build Environment
-      # Some projects don't allow in-source building, so create a separate build directory
-      # We'll use this as our working directory for all subsequent commands
-      run: cmake -E make_directory ${{runner.workspace}}/build
-
-    - name: Configure CMake
-      # Use a bash shell so we can use the same syntax for environment variable
-      # access regardless of the host operating system
-      shell: bash
-      working-directory: ${{runner.workspace}}/build
-      # Note the current convention is to use the -S and -B options here to specify source
-      # and build directories, but this is only available with CMake 3.13 and higher.
-      # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
-      # Let CMake select the Visual Studio version installed on the runner.
-      # Pinning VS 2022 breaks as hosted Windows images move to newer releases.
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A Win32
-
     - uses: actions/download-artifact@v4
       with:
         name: firmware
 
-    - name: Build
-      working-directory: ${{runner.workspace}}/build
-      shell: bash
-      # Execute the build.  You can specify a specific target with "--target <NAME>"
-      run: cmake --build . --config $BUILD_TYPE
-
-    - name: Create Build64 Environment
+    - name: Create x64 build environment
       run: cmake -E make_directory ${{runner.workspace}}/build64
 
-    - name: Configure CMake64
+    - name: Configure x64 module
       shell: bash
       working-directory: ${{runner.workspace}}/build64
+      # Let CMake select the Visual Studio version installed on the runner.
       run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
 
-    - name: Build
+    - name: Build x64 SDDCSupport
       working-directory: ${{runner.workspace}}/build64
       shell: bash
-      # Execute the build.  You can specify a specific target with "--target <NAME>"
-      run: cmake --build . --config $BUILD_TYPE
+      run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
 
     - uses: actions/upload-artifact@v4
       with:
         name: SDDCSupport-Windows-x64
         path: ${{runner.workspace}}/build64/SoapySDDC/Release/SDDCSupport.dll
-
-    - name: Install FFTW3
-      working-directory: ${{runner.workspace}}/build
-      shell: powershell
-      # Execute the build.  You can specify a specific target with "--target <NAME>"
-      run: Invoke-WebRequest -Uri "ftp://ftp.fftw.org/pub/fftw/fftw-3.3.5-dll32.zip" -OutFile fftw-3.3.5-dll32.zip
-
-    - name: Unzip FFTW3
-      working-directory: ${{runner.workspace}}/build
-      shell: powershell
-      # Execute the build.  You can specify a specific target with "--target <NAME>"
-      run: Expand-Archive -Path .\fftw-3.3.5-dll32.zip -DestinationPath unittest
-
-    - name: Create Package
-      shell: powershell
-      run: Compress-Archive -DestinationPath SDDC_EXTIO.ZIP -LiteralPath ${{runner.workspace}}/build/ExtIO_sddc/Release/ExtIO_SDDC.dll,${{runner.workspace}}/build/unittest/libfftw3f-3.dll,README.md
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ExtIO_Windows_x86
-        path: SDDC_EXTIO.ZIP
 
   build-on-linux:
     # The CMake configure and build commands are platform agnostic and should work equally
