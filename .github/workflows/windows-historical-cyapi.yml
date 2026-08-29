@@ -1,0 +1,73 @@
+name: Windows historical CyAPI lifecycle diagnostic
+
+on:
+  push:
+    branches:
+      - wd/windows-historical-cyapi-lifecycle
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-windows-historical-cyapi:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore historical CyAPI request lifecycle
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('Core/arch/win32/FX3handler.cpp')
+          text = path.read_text()
+
+          overlap_reset = '''    // A completed OVERLAPPED must be reset before it is submitted again.\n    // Preserve the event handle, but clear Internal/InternalHigh and the\n    // offset union written by the previous DeviceIoControl operation.\n    const HANDLE event = read->overlap.hEvent;\n    ResetEvent(event);\n    read->overlap = {};\n    read->overlap.hEvent = event;\n\n'''
+          if overlap_reset not in text:
+              raise SystemExit('Expected OVERLAPPED reset block not found')
+          text = text.replace(overlap_reset, '', 1)
+
+          active_cleanup = '''    const bool failed_while_running = run.exchange(false);\n    if (failed_while_running && endpoint != nullptr) endpoint->Abort();\n    for (size_t i = 0; i < contexts.size(); ++i) {\n        CancelAndReapDataXfer(endpoint, &contexts[i], i);\n        CleanupDataXfer(&contexts[i]);\n    }\n'''
+          historical_cleanup = '''    run = false;\n    for (size_t i = 0; i < contexts.size(); ++i) {\n        CleanupDataXfer(&contexts[i]);\n    }\n'''
+          if active_cleanup not in text:
+              raise SystemExit('Expected active request cleanup block not found')
+          text = text.replace(active_cleanup, historical_cleanup, 1)
+
+          stop_abort = '''    if (endpoint != nullptr) endpoint->Abort();\n    adc_samples_thread.join();\n'''
+          historical_stop = '''    // Historical CyAPI behavior: do not abort normal Stop. Let the transfer\n    // currently awaited by the receive thread complete naturally, then join.\n    adc_samples_thread.join();\n'''
+          if stop_abort not in text:
+              raise SystemExit('Expected StopStream Abort block not found')
+          text = text.replace(stop_abort, historical_stop, 1)
+
+          path.write_text(text)
+          print('Applied historical Windows CyAPI lifecycle diagnostic patch')
+
+      - name: Show diagnostic diff
+        shell: bash
+        run: git diff -- Core/arch/win32/FX3handler.cpp
+
+      - name: Install vcpkg dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+
+      - name: Create x64 build environment
+        run: cmake -E make_directory ${{runner.workspace}}/build64-historical
+
+      - name: Configure x64 module
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-historical
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+
+      - name: Build x64 SDDCSupport
+        working-directory: ${{runner.workspace}}/build64-historical
+        shell: bash
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+
+      - name: SHA256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-historical/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-historical-cyapi
+          path: ${{runner.workspace}}/build64-historical/SoapySDDC/Release/SDDCSupport.dll
