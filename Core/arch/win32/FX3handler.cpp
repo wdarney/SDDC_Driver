@@ -221,12 +221,7 @@ bool fx3handler::Open(SDDC::DeviceItem selector)
         return false;
     }
 
-    if (!Control(STOPFX3, static_cast<uint8_t>(0))) {
-        ErrorPrintln(TAG, "Unable to stop the RX888 stream during initialization");
-        Close();
-        return false;
-    }
-
+    WarnPrintln(TAG, "OPEN USB: preserving firmware state without redundant STOP");
     return true;
 }
 
