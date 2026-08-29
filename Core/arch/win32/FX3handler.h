@@ -46,7 +46,6 @@ private:
     ringbuffer<int16_t>* inputbuffer = nullptr;
     std::thread adc_samples_thread;
     std::atomic<bool> run { false };
-    bool reset_endpoint_before_start = false;
 };
 
 #endif

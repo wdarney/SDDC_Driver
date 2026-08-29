@@ -225,6 +225,19 @@ bool fx3handler::Open(SDDC::DeviceItem selector)
         Close();
         return false;
     }
+
+    // SDR++ destroys and recreates the Soapy device between Play sessions.
+    // The previous instance aborts its outstanding overlapped reads, but that
+    // halted pipe state can survive closing and reopening the CyUSB handle.
+    // Reset the newly opened bulk endpoint after the firmware is stopped and
+    // before any new transfers are submitted.
+    if (endpoint->Reset()) {
+        WarnPrintln(TAG, "OPEN USB: Cypress bulk endpoint reset completed");
+    }
+    else {
+        ErrorPrintln(TAG, "OPEN USB: Cypress bulk endpoint reset failed (error %lu)",
+            endpoint->LastError);
+    }
     return true;
 }
 
@@ -450,22 +463,6 @@ void fx3handler::AdcSamplesProcess()
 void fx3handler::StartStream(ringbuffer<int16_t>& input)
 {
     if (run.exchange(true)) return;
-
-    // AbortPipe is required to release outstanding overlapped reads during
-    // StopStream, but the Cypress driver leaves the bulk endpoint halted after
-    // that abort.  Reset only on a subsequent start so the first/cold-start
-    // path remains unchanged.
-    if (reset_endpoint_before_start && endpoint != nullptr) {
-        if (endpoint->Reset()) {
-            WarnPrintln(TAG, "RESTART USB: Cypress bulk endpoint reset completed");
-        }
-        else {
-            ErrorPrintln(TAG, "RESTART USB: Cypress bulk endpoint reset failed (error %lu)",
-                endpoint->LastError);
-        }
-        reset_endpoint_before_start = false;
-    }
-
     WarnPrintln(TAG, "Starting Cypress receive thread");
     inputbuffer = &input;
     inputbuffer->setBlockSize(transferSamples);
@@ -477,6 +474,5 @@ void fx3handler::StopStream()
     run = false;
     if (endpoint != nullptr) endpoint->Abort();
     if (adc_samples_thread.joinable()) adc_samples_thread.join();
-    if (endpoint != nullptr) reset_endpoint_before_start = true;
     inputbuffer = nullptr;
 }
