@@ -223,7 +223,7 @@ sddc_err_t RadioHardware::SetLED(sddc_leds_t led, bool on)
 RadioHardware::~RadioHardware()
 {
     TracePrintln(TAG, "");
-    if (Fx3) {
-        SetGPIO(SHDWN);
-    }
+    // Preserve the hardware state across normal Soapy device teardown.
+    // SDR++ destroys and recreates the device between stream sessions;
+    // asserting SHDWN here leaves the replacement instance unable to stream.
 }
