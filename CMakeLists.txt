@@ -20,6 +20,7 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE} " - Version: " ${VERSION} " / 
 # allow disabling optimizations - for debug reasons
 option(USE_SIMD_OPTIMIZATIONS "enable SIMD optimizations" ON)
 option(SDDC_ENABLE_IPO "enable interprocedural optimization in Release builds" ON)
+option(SDDC_USE_PACKAGE_FFTW "use an installed FFTW package instead of the legacy Windows binary" OFF)
 
 # allow enabling address sanitizer - for debug reasons
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -40,35 +41,47 @@ if (MSVC)
         endif()
     endif()
 
-    get_filename_component(SDKPATH ${CMAKE_LINKER} DIRECTORY)
-    find_program(LIBEXE lib HINTS ${SDKPATH} REQUIRED)
-
-    # External Project FFTW on Windows
-    if(${CMAKE_EXE_LINKER_FLAGS} MATCHES "X86")
-        SET(FFTW_URL "ftp://ftp.fftw.org/pub/fftw/fftw-3.3.5-dll32.zip")
-        SET(ARCH x86)
-        SET(HASH 29882a43033c9393479a4df52a2e9120589c06a2b724155b1a682747fa3e57d4)
+    if(SDDC_USE_PACKAGE_FFTW)
+        # This permits the Windows performance build to link vcpkg's
+        # x64-windows-static-md FFTW package.  Static linking keeps the Soapy
+        # module a single-file replacement while the package's AVX2 feature
+        # supplies runtime-dispatched SSE/AVX/AVX2/FMA FFT kernels.
+        find_package(FFTW3f CONFIG REQUIRED)
+        set(LIBFFTW_INCLUDE_DIRS "")
+        set(LIBFFTW_LIBRARY_DIRS "")
+        set(LIBFFTW_LIBRARIES FFTW3::fftw3f)
+        message(STATUS "Using packaged FFTW target: FFTW3::fftw3f")
     else()
-        SET(FFTW_URL "ftp://ftp.fftw.org/pub/fftw/fftw-3.3.5-dll64.zip")
-        SET(ARCH x64)
-        SET(HASH cfd88dc0e8d7001115ea79e069a2c695d52c8947f5b4f3b7ac54a192756f439f)
-    endif()
+        get_filename_component(SDKPATH ${CMAKE_LINKER} DIRECTORY)
+        find_program(LIBEXE lib HINTS ${SDKPATH} REQUIRED)
 
-    include(ExternalProject)
-    ExternalProject_Add(
-        LIBFFTW
-        URL ${FFTW_URL}
-        URL_HASH SHA256=${HASH}
-        BUILD_IN_SOURCE TRUE
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        CONFIGURE_COMMAND   ""
-        BUILD_COMMAND       ${LIBEXE} /def:./libfftw3f-3.def /MACHINE:${ARCH} /OUT:./fftw3f-3.lib
-        INSTALL_COMMAND     ""
-    )
-    ExternalProject_Get_Property(LIBFFTW SOURCE_DIR)
-    SET(LIBFFTW_INCLUDE_DIRS ${SOURCE_DIR})
-    SET(LIBFFTW_LIBRARY_DIRS ${SOURCE_DIR})
-    SET(LIBFFTW_LIBRARIES fftw3f-3)
+        # Preserve the historical Windows dependency path for normal builds.
+        if(${CMAKE_EXE_LINKER_FLAGS} MATCHES "X86")
+            SET(FFTW_URL "ftp://ftp.fftw.org/pub/fftw/fftw-3.3.5-dll32.zip")
+            SET(ARCH x86)
+            SET(HASH 29882a43033c9393479a4df52a2e9120589c06a2b724155b1a682747fa3e57d4)
+        else()
+            SET(FFTW_URL "ftp://ftp.fftw.org/pub/fftw/fftw-3.3.5-dll64.zip")
+            SET(ARCH x64)
+            SET(HASH cfd88dc0e8d7001115ea79e069a2c695d52c8947f5b4f3b7ac54a192756f439f)
+        endif()
+
+        include(ExternalProject)
+        ExternalProject_Add(
+            LIBFFTW
+            URL ${FFTW_URL}
+            URL_HASH SHA256=${HASH}
+            BUILD_IN_SOURCE TRUE
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            CONFIGURE_COMMAND   ""
+            BUILD_COMMAND       ${LIBEXE} /def:./libfftw3f-3.def /MACHINE:${ARCH} /OUT:./fftw3f-3.lib
+            INSTALL_COMMAND     ""
+        )
+        ExternalProject_Get_Property(LIBFFTW SOURCE_DIR)
+        SET(LIBFFTW_INCLUDE_DIRS ${SOURCE_DIR})
+        SET(LIBFFTW_LIBRARY_DIRS ${SOURCE_DIR})
+        SET(LIBFFTW_LIBRARIES fftw3f-3)
+    endif()
 
 else()
     if (USE_DEBUG_ASAN)
