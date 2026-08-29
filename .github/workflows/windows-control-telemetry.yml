@@ -1,0 +1,66 @@
+name: Windows RX888 control-sequence telemetry
+
+on:
+  push:
+    branches: [wd/windows-historical-cyapi-lifecycle]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instrument FX3 control transfers and RadioHandler lifecycle
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('Core/arch/win32/FX3handler.cpp')
+          s = p.read_text()
+          replacements = [
+            ('bool fx3handler::Control(FX3Command command, uint8_t data)\n{', 'bool fx3handler::Control(FX3Command command, uint8_t data)\n{\n    WarnPrintln(TAG, "CTRL8 command=0x%02X data=0x%02X", (unsigned)command, (unsigned)data);'),
+            ('bool fx3handler::Control(FX3Command command, uint32_t data)\n{', 'bool fx3handler::Control(FX3Command command, uint32_t data)\n{\n    WarnPrintln(TAG, "CTRL32 command=0x%02X data=%u (0x%08X)", (unsigned)command, (unsigned)data, (unsigned)data);'),
+            ('bool fx3handler::Control(FX3Command command, uint64_t data)\n{', 'bool fx3handler::Control(FX3Command command, uint64_t data)\n{\n    WarnPrintln(TAG, "CTRL64 command=0x%02X data=%llu", (unsigned)command, (unsigned long long)data);'),
+            ('bool fx3handler::SetArgument(uint16_t index, uint16_t value)\n{', 'bool fx3handler::SetArgument(uint16_t index, uint16_t value)\n{\n    WarnPrintln(TAG, "SETARG index=0x%04X value=0x%04X", (unsigned)index, (unsigned)value);'),
+          ]
+          for old,new in replacements:
+            if old not in s: raise SystemExit('missing marker: '+old)
+            s=s.replace(old,new,1)
+          # Log success/failure immediately around the actual control endpoint writes.
+          s=s.replace('return fx3dev->ControlEndPt->Write(&data, length);', 'const bool ok = fx3dev->ControlEndPt->Write(&data, length);\n    WarnPrintln(TAG, "CONTROL RESULT=%d", ok ? 1 : 0);\n    return ok;', 2)
+          s=s.replace('return fx3dev->ControlEndPt->Write(reinterpret_cast<PUCHAR>(&data), length);', 'const bool ok = fx3dev->ControlEndPt->Write(reinterpret_cast<PUCHAR>(&data), length);\n    WarnPrintln(TAG, "CONTROL RESULT=%d", ok ? 1 : 0);\n    return ok;', 2)
+          p.write_text(s)
+
+          p = Path('Core/RadioHandler.cpp')
+          s = p.read_text()
+          s=s.replace('WarnPrintln(TAG, "STARTUP 1/7: RadioHandler::Start entered");', 'WarnPrintln(TAG, "SESSION START: mode=%d adc=%u convert=%d", (int)hardware->GetRFMode(), (unsigned)hardware->GetADCSampleRate(), convert_r2iq ? 1 : 0);\n\tWarnPrintln(TAG, "STARTUP 1/7: RadioHandler::Start entered");',1)
+          s=s.replace('if(streamRunning)\n\t{', 'if(streamRunning)\n\t{\n\t\tWarnPrintln(TAG, "SESSION STOP: mode=%d adc=%u", (int)hardware->GetRFMode(), (unsigned)hardware->GetADCSampleRate());',1)
+          s=s.replace('sddc_err_t ret = hardware->StopStream();', 'WarnPrintln(TAG, "SESSION STOP: issuing hardware STOP");\n\t\tsddc_err_t ret = hardware->StopStream();\n\t\tWarnPrintln(TAG, "SESSION STOP: hardware STOP result=%d", (int)ret);',1)
+          p.write_text(s)
+          print('Control telemetry instrumentation applied')
+
+      - name: Show instrumentation diff
+        shell: bash
+        run: git diff -- Core/RadioHandler.cpp Core/arch/win32/FX3handler.cpp
+
+      - name: Install dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+      - run: cmake -E make_directory ${{runner.workspace}}/build64-controltelemetry
+      - name: Configure
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-controltelemetry
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+      - name: Build
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-controltelemetry
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+      - name: SHA256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-controltelemetry/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-control-telemetry
+          path: ${{runner.workspace}}/build64-controltelemetry/SoapySDDC/Release/SDDCSupport.dll
