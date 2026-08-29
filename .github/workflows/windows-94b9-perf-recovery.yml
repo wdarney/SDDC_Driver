@@ -1,0 +1,33 @@
+name: Windows RX888 94b9 performance recovery
+
+on:
+  push:
+    branches: [wd/rx888-94b9-perf-recovery-shdwn]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+      - run: cmake -E make_directory ${{runner.workspace}}/build64-94b9-perf-recovery
+      - name: Configure
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-94b9-perf-recovery
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+      - name: Build SDDCSupport.dll
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-94b9-perf-recovery
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+      - name: Record SHA-256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-94b9-perf-recovery/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-94b9-perf-recovery
+          path: ${{runner.workspace}}/build64-94b9-perf-recovery/SoapySDDC/Release/SDDCSupport.dll
