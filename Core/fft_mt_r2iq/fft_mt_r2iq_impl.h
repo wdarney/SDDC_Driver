@@ -23,17 +23,39 @@
     plan_freq2time = &plan_freq2time_per_decimation[decimation];
     int decimate_count = 0;
 
+    // Keep the established copy-owned R2IQ buffers on native Windows for this
+    // controlled A/B. Other platforms retain the newer zero-copy ownership.
+#ifdef _WIN32
+    std::vector<float> iq_output_storage(inputbuffer_block_size);
+    float* iq_output = iq_output_storage.data();
+    std::vector<int16_t> input_current_storage;
+#else
     float* iq_output = nullptr;
+#endif
     size_t output_buffer_offset = 0;
     [[maybe_unused]] const size_t output_complex_capacity = outputbuffer->getBlockSize() / 2;
 
     const int16_t* input_current_block = nullptr;
-    bool first_input_block = true;
+#ifdef _WIN32
+    // This matches the ownership/storage used before e3e5b151 without
+    // changing the USB producer or any non-Windows performance path.
+    std::vector<int16_t> last_block_end(BASE_FFT_SCRAP_SIZE);
+#else
     // Fixed overlap storage avoids constructing a vector on every input block.
     std::array<int16_t, BASE_FFT_SCRAP_SIZE> last_block_end{};
+#endif
+    bool first_input_block = true;
 
     while(r2iqOn)
     {
+#ifdef _WIN32
+        input_current_storage = inputbuffer->pop();
+        if (input_current_storage.empty())
+            return 0;
+        if (!r2iqOn)
+            return 0;
+        input_current_block = input_current_storage.data();
+#else
         input_current_block = inputbuffer->acquireReadBlock();
         if (input_current_block == nullptr)
             return 0;
@@ -42,10 +64,15 @@
             inputbuffer->releaseReadBlock();
             return 0;
         }
+#endif
 
         if (first_input_block)
             WarnPrintln(TAG, "STARTUP DSP: first input block acquired");
 
+#ifdef _WIN32
+        if (first_input_block)
+            WarnPrintln(TAG, "STARTUP DSP: legacy Windows output vector ready");
+#else
         if (iq_output == nullptr)
         {
             iq_output = outputbuffer->acquireWriteBlock();
@@ -63,6 +90,7 @@
             if (first_input_block)
                 WarnPrintln(TAG, "STARTUP DSP: first output block cleared");
         }
+#endif
 
         // @todo: move the following int16_t conversion to (32-bit) float
         // directly inside the following loop (for "k < ffts_per_blocks")
@@ -247,12 +275,18 @@
         decimate_count = (decimate_count + 1) & (deci_ratio - 1);
         if (decimate_count == 0) {
             assert(output_buffer_offset == output_complex_capacity);
+#ifdef _WIN32
+            outputbuffer->push(iq_output_storage);
+#else
             outputbuffer->commitWriteBlock();
             iq_output = nullptr;
+#endif
             output_buffer_offset = 0;
         }
 
+#ifndef _WIN32
         inputbuffer->releaseReadBlock();
+#endif
     }
     return 0;
 }
