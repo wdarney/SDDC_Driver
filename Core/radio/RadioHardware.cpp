@@ -223,7 +223,7 @@ sddc_err_t RadioHardware::SetLED(sddc_leds_t led, bool on)
 RadioHardware::~RadioHardware()
 {
     TracePrintln(TAG, "");
-    if (Fx3) {
-        SetGPIO(SHDWN);
-    }
+    // SDR++ destroys and recreates the Soapy device between Play sessions.
+    // Do not assert SHDWN here: that state persists in the hardware and prevents
+    // the newly created instance from producing samples after restart.
 }
