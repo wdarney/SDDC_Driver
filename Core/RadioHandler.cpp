@@ -341,15 +341,22 @@ sddc_err_t RadioHandler::Stop()
 
 		// Then we continue shutting down components in reverse order
 		r2iqCntrl->TurnOff();
+
+		// Stop and flush the FX3 producer before aborting the host's pending
+		// Cypress reads. Aborting the pipe while the firmware is still feeding
+		// it can leave the device unable to produce data after the handle is
+		// closed and reopened.
+		WarnPrintln(TAG, "SHUTDOWN USB 1/2: stopping FX3 producer");
+		sddc_err_t ret = hardware->StopStream();
+		if(ret != ERR_SUCCESS) return ret;
+		WarnPrintln(TAG, "SHUTDOWN USB 2/2: FX3 producer stopped; canceling host reads");
+
 		fx3->StopStream();
 		DebugPrintln(TAG, "Signal pipeline stopped");
 
 		if (show_stats_thread.joinable()) show_stats_thread.join();
 		DebugPrintln(TAG, "Stat thread finished");
 
-		// Disable stream on the SDR
-		sddc_err_t ret = hardware->StopStream();
-		if(ret != ERR_SUCCESS) return ret;
 	}
 	return ERR_SUCCESS;
 }

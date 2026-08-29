@@ -226,18 +226,6 @@ bool fx3handler::Open(SDDC::DeviceItem selector)
         return false;
     }
 
-    // SDR++ destroys and recreates the Soapy device between Play sessions.
-    // The previous instance aborts its outstanding overlapped reads, but that
-    // halted pipe state can survive closing and reopening the CyUSB handle.
-    // Reset the newly opened bulk endpoint after the firmware is stopped and
-    // before any new transfers are submitted.
-    if (endpoint->Reset()) {
-        WarnPrintln(TAG, "OPEN USB: Cypress bulk endpoint reset completed");
-    }
-    else {
-        ErrorPrintln(TAG, "OPEN USB: Cypress bulk endpoint reset failed (error %lu)",
-            endpoint->LastError);
-    }
     return true;
 }
 
