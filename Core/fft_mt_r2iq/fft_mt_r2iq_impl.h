@@ -4,6 +4,38 @@
     TracePrintln(TAG, "%p", th);
     DebugPrintln(TAG, "Initialization...");
 
+    using profile_clock = std::chrono::steady_clock;
+    using profile_time_point = profile_clock::time_point;
+    constexpr uint64_t PROFILE_SAMPLE_PERIOD = 17;
+    constexpr uint64_t PROFILE_REPORT_SAMPLES = 64;
+    const char* profile_request = std::getenv("SDDC_R2IQ_PROFILE");
+    const bool profile_enabled = profile_request != nullptr &&
+        profile_request[0] != '\0' && std::strcmp(profile_request, "0") != 0;
+
+    uint64_t profile_blocks_seen = 0;
+    uint64_t profile_samples = 0;
+    uint64_t profile_input_wait_ns = 0;
+    uint64_t profile_output_wait_ns = 0;
+    uint64_t profile_output_acquires = 0;
+    uint64_t profile_clear_ns = 0;
+    uint64_t profile_clear_events = 0;
+    uint64_t profile_convert_ns = 0;
+    uint64_t profile_overlap_ns = 0;
+    uint64_t profile_fft_wall_ns = 0;
+    uint64_t profile_worker_wait_ns = 0;
+    uint64_t profile_active_ns = 0;
+    std::atomic<uint64_t> profile_chunks{0};
+    std::atomic<uint64_t> profile_forward_ns{0};
+    std::atomic<uint64_t> profile_shift_ns{0};
+    std::atomic<uint64_t> profile_inverse_ns{0};
+    std::atomic<uint64_t> profile_copy_ns{0};
+
+    if (profile_enabled)
+        WarnPrintln(TAG,
+            "PROFILE enabled: sampling every %llu blocks; report after %llu samples",
+            static_cast<unsigned long long>(PROFILE_SAMPLE_PERIOD),
+            static_cast<unsigned long long>(PROFILE_REPORT_SAMPLES));
+
     const int deci_ratio = decimation_ratio[decimation];
 
     const int deci_fft_scrap_size = (BASE_FFT_SCRAP_SIZE / 2) / deci_ratio;
@@ -43,15 +75,28 @@
     int work_center_frequency_bin = 0;
     float* work_iq_output = nullptr;
     size_t work_output_buffer_offset = 0;
+    bool work_profile_sample = false;
 
     auto process_chunk = [&](r2iqThreadArg* worker, int k,
                              int block_center_frequency_bin,
                              float* block_iq_output,
-                             size_t block_output_buffer_offset) {
+                             size_t block_output_buffer_offset,
+                             bool profile_sample) {
+        profile_time_point stage_start;
+        if (profile_sample)
+            stage_start = profile_clock::now();
         fftwf_execute_dft_r2c(
             worker->plan_time2freq_r2c,
             th->ADCinTime + k * (BASE_FFT_SIZE - BASE_FFT_SCRAP_SIZE),
             worker->ADCinFreq);
+        if (profile_sample)
+        {
+            const auto stage_end = profile_clock::now();
+            profile_forward_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end - stage_start).count(),
+                std::memory_order_relaxed);
+            stage_start = stage_end;
+        }
 
         const auto upper_frequencies_source =
             &worker->ADCinFreq[block_center_frequency_bin];
@@ -75,10 +120,26 @@
         if (lower_frequencies_start != 0)
             memset(worker->inFreqTmp[fft_output_half_size], 0,
                 lower_frequencies_start * sizeof(fftwf_complex));
+        if (profile_sample)
+        {
+            const auto stage_end = profile_clock::now();
+            profile_shift_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end - stage_start).count(),
+                std::memory_order_relaxed);
+            stage_start = stage_end;
+        }
 
         fftwf_execute_dft(
             worker->plan_freq2time_per_decimation[decimation],
             worker->inFreqTmp, worker->inFreqTmp);
+        if (profile_sample)
+        {
+            const auto stage_end = profile_clock::now();
+            profile_inverse_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end - stage_start).count(),
+                std::memory_order_relaxed);
+            stage_start = stage_end;
+        }
 
         const size_t destination_offset = block_output_buffer_offset +
             static_cast<size_t>(k) * fft_useful_size;
@@ -91,6 +152,14 @@
             r2iq_copy<false>(
                 reinterpret_cast<fftwf_complex*>(&block_iq_output[destination_offset * 2]),
                 &worker->inFreqTmp[0], fft_useful_size);
+        if (profile_sample)
+        {
+            const auto stage_end = profile_clock::now();
+            profile_copy_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end - stage_start).count(),
+                std::memory_order_relaxed);
+            profile_chunks.fetch_add(1, std::memory_order_relaxed);
+        }
     };
 
     std::vector<std::thread> chunk_workers;
@@ -103,6 +172,7 @@
                 int block_center_frequency_bin = 0;
                 float* block_iq_output = nullptr;
                 size_t block_output_buffer_offset = 0;
+                bool profile_sample = false;
                 {
                     std::unique_lock<std::mutex> lock(chunk_mutex);
                     chunk_ready.wait(lock, [&] {
@@ -114,6 +184,7 @@
                     block_center_frequency_bin = work_center_frequency_bin;
                     block_iq_output = work_iq_output;
                     block_output_buffer_offset = work_output_buffer_offset;
+                    profile_sample = work_profile_sample;
                 }
 
                 while (true)
@@ -123,7 +194,7 @@
                         break;
                     process_chunk(threadArgs[worker_index], k,
                         block_center_frequency_bin, block_iq_output,
-                        block_output_buffer_offset);
+                        block_output_buffer_offset, profile_sample);
                 }
 
                 {
@@ -137,9 +208,21 @@
 
     while(r2iqOn)
     {
+        const bool profile_sample = profile_enabled &&
+            (profile_blocks_seen++ % PROFILE_SAMPLE_PERIOD == 0);
+        profile_time_point input_wait_start;
+        if (profile_sample)
+            input_wait_start = profile_clock::now();
         input_current_block = inputbuffer->acquireReadBlock();
         if (input_current_block == nullptr)
             break;
+        profile_time_point active_start;
+        if (profile_sample)
+        {
+            active_start = profile_clock::now();
+            profile_input_wait_ns +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(active_start - input_wait_start).count();
+        }
         if (!r2iqOn)
         {
             inputbuffer->releaseReadBlock();
@@ -151,11 +234,22 @@
 
         if (iq_output == nullptr)
         {
+            profile_time_point output_wait_start;
+            if (profile_sample)
+                output_wait_start = profile_clock::now();
             iq_output = outputbuffer->acquireWriteBlock();
             if (iq_output == nullptr)
             {
                 inputbuffer->releaseReadBlock();
                 break;
+            }
+            if (profile_sample)
+            {
+                const auto output_wait_end = profile_clock::now();
+                profile_output_wait_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(output_wait_end - output_wait_start).count();
+                profile_output_acquires++;
+                output_wait_start = output_wait_end;
             }
             if (first_input_block)
                 WarnPrintln(TAG, "STARTUP DSP: first output block acquired");
@@ -163,6 +257,13 @@
             // block. Some high-decimation offset paths do not overwrite every
             // element, so preserve those zero-filled gaps when reusing blocks.
             std::fill_n(iq_output, outputbuffer->getBlockSize(), 0.0f);
+            if (profile_sample)
+            {
+                const auto clear_end = profile_clock::now();
+                profile_clear_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(clear_end - output_wait_start).count();
+                profile_clear_events++;
+            }
             if (first_input_block)
                 WarnPrintln(TAG, "STARTUP DSP: first output block cleared");
         }
@@ -174,6 +275,9 @@
 #if PRINT_INPUT_RANGE
         std::pair<int16_t, int16_t> blockMinMax = std::make_pair<int16_t, int16_t>(0, 0);
 #endif
+        profile_time_point convert_start;
+        if (profile_sample)
+            convert_start = profile_clock::now();
         if (!this->getRand())        // plain samples no ADC rand set
         {
             r2iq_convert_float<false>(
@@ -214,11 +318,25 @@
                 WarnPrintln(TAG, "STARTUP DSP: first randomized input payload converted");
         }
 
+        profile_time_point overlap_start;
+        if (profile_sample)
+        {
+            overlap_start = profile_clock::now();
+            profile_convert_ns +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(overlap_start - convert_start).count();
+        }
+
         std::copy_n(
             input_current_block + inputbuffer_block_size - BASE_FFT_SCRAP_SIZE,
             BASE_FFT_SCRAP_SIZE,
             last_block_end.data()
         );
+        if (profile_sample)
+        {
+            const auto overlap_end = profile_clock::now();
+            profile_overlap_ns +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(overlap_end - overlap_start).count();
+        }
         if (first_input_block)
             WarnPrintln(TAG, "STARTUP DSP: first overlap history saved");
         if (first_input_block) {
@@ -244,11 +362,14 @@
 #endif
         
         const int block_center_frequency_bin = this->center_frequency_bin;
+        profile_time_point fft_wall_start;
+        if (profile_sample)
+            fft_wall_start = profile_clock::now();
         if (processor_count <= 1)
         {
             for (int k = 0; k < ffts_per_blocks; k++)
                 process_chunk(threadArgs[0], k, block_center_frequency_bin,
-                    iq_output, output_buffer_offset);
+                    iq_output, output_buffer_offset, profile_sample);
         }
         else
         {
@@ -257,6 +378,7 @@
                 work_center_frequency_bin = block_center_frequency_bin;
                 work_iq_output = iq_output;
                 work_output_buffer_offset = output_buffer_offset;
+                work_profile_sample = profile_sample;
                 next_chunk = 0;
                 completed_workers = 0;
                 chunk_sequence++;
@@ -269,14 +391,24 @@
                 if (k >= ffts_per_blocks)
                     break;
                 process_chunk(threadArgs[0], k, block_center_frequency_bin,
-                    iq_output, output_buffer_offset);
+                    iq_output, output_buffer_offset, profile_sample);
             }
 
+            profile_time_point worker_wait_start;
+            if (profile_sample)
+                worker_wait_start = profile_clock::now();
             std::unique_lock<std::mutex> lock(chunk_mutex);
             chunk_done.wait(lock, [&] {
                 return completed_workers >= processor_count - 1;
             });
+            if (profile_sample)
+                profile_worker_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    profile_clock::now() - worker_wait_start).count();
         }
+
+        if (profile_sample)
+            profile_fft_wall_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                profile_clock::now() - fft_wall_start).count();
 
         output_buffer_offset += static_cast<size_t>(ffts_per_blocks) * fft_useful_size;
         decimate_count = (decimate_count + 1) & (deci_ratio - 1);
@@ -288,6 +420,61 @@
         }
 
         inputbuffer->releaseReadBlock();
+
+        if (profile_sample)
+        {
+            profile_active_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                profile_clock::now() - active_start).count();
+            profile_samples++;
+
+            if (profile_samples >= PROFILE_REPORT_SAMPLES)
+            {
+                const auto chunks = profile_chunks.exchange(0, std::memory_order_relaxed);
+                const auto forward_ns = profile_forward_ns.exchange(0, std::memory_order_relaxed);
+                const auto shift_ns = profile_shift_ns.exchange(0, std::memory_order_relaxed);
+                const auto inverse_ns = profile_inverse_ns.exchange(0, std::memory_order_relaxed);
+                const auto copy_ns = profile_copy_ns.exchange(0, std::memory_order_relaxed);
+                const auto fft_cpu_ns = forward_ns + shift_ns + inverse_ns + copy_ns;
+                const auto avg_us = [](uint64_t ns, uint64_t count) {
+                    return count == 0 ? 0.0 : static_cast<double>(ns) / (1000.0 * count);
+                };
+                const auto pct = [fft_cpu_ns](uint64_t ns) {
+                    return fft_cpu_ns == 0 ? 0.0 : 100.0 * static_cast<double>(ns) / fft_cpu_ns;
+                };
+
+                WarnPrintln(TAG,
+                    "PROFILE R2IQ samples=%llu/%llu chunks=%llu workers=%u decim=%d avg_us input_wait=%.1f output_wait=%.1f clear=%.1f convert=%.1f overlap=%.1f fft_wall=%.1f worker_wait=%.1f active=%.1f fft_cpu_us forward=%.1f(%.1f%%) shift=%.1f(%.1f%%) inverse=%.1f(%.1f%%) copy=%.1f(%.1f%%)",
+                    static_cast<unsigned long long>(profile_samples),
+                    static_cast<unsigned long long>(profile_blocks_seen),
+                    static_cast<unsigned long long>(chunks),
+                    processor_count, decimation,
+                    avg_us(profile_input_wait_ns, profile_samples),
+                    avg_us(profile_output_wait_ns, profile_output_acquires),
+                    avg_us(profile_clear_ns, profile_clear_events),
+                    avg_us(profile_convert_ns, profile_samples),
+                    avg_us(profile_overlap_ns, profile_samples),
+                    avg_us(profile_fft_wall_ns, profile_samples),
+                    avg_us(profile_worker_wait_ns, profile_samples),
+                    avg_us(profile_active_ns, profile_samples),
+                    avg_us(forward_ns, profile_samples), pct(forward_ns),
+                    avg_us(shift_ns, profile_samples), pct(shift_ns),
+                    avg_us(inverse_ns, profile_samples), pct(inverse_ns),
+                    avg_us(copy_ns, profile_samples), pct(copy_ns));
+
+                profile_samples = 0;
+                profile_blocks_seen = 0;
+                profile_input_wait_ns = 0;
+                profile_output_wait_ns = 0;
+                profile_output_acquires = 0;
+                profile_clear_ns = 0;
+                profile_clear_events = 0;
+                profile_convert_ns = 0;
+                profile_overlap_ns = 0;
+                profile_fft_wall_ns = 0;
+                profile_worker_wait_ns = 0;
+                profile_active_ns = 0;
+            }
+        }
     }
 
     {

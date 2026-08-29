@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -346,6 +347,20 @@ void fx3handler::CleanupDataXfer(void** context)
 void fx3handler::AdcSamplesProcess()
 {
     WarnPrintln(TAG, "STARTUP USB 1/3: Cypress receive thread entered");
+    using profile_clock = std::chrono::steady_clock;
+    constexpr uint64_t PROFILE_SAMPLE_PERIOD = 17;
+    constexpr uint64_t PROFILE_REPORT_SAMPLES = 64;
+    const char* profile_request = std::getenv("SDDC_R2IQ_PROFILE");
+    const bool profile_enabled = profile_request != nullptr &&
+        profile_request[0] != '\0' && std::strcmp(profile_request, "0") != 0;
+    uint64_t profile_transfers_seen = 0;
+    uint64_t profile_samples = 0;
+    uint64_t profile_usb_wait_ns = 0;
+    uint64_t profile_ring_wait_ns = 0;
+    uint64_t profile_copy_ns = 0;
+    uint64_t profile_commit_ns = 0;
+    uint64_t profile_requeue_ns = 0;
+    uint64_t profile_loop_ns = 0;
     std::array<std::vector<uint8_t>, USB_READ_CONCURRENT> buffers;
     std::array<void*, USB_READ_CONCURRENT> contexts {};
     for (size_t i = 0; i < USB_READ_CONCURRENT; ++i) {
@@ -368,7 +383,19 @@ void fx3handler::AdcSamplesProcess()
     bool first_transfer = true;
     bool first_block = true;
     while (run.load()) {
+        const bool profile_sample = profile_enabled &&
+            (profile_transfers_seen++ % PROFILE_SAMPLE_PERIOD == 0);
+        std::chrono::steady_clock::time_point stage_start;
+        std::chrono::steady_clock::time_point loop_start;
+        if (profile_sample)
+            stage_start = loop_start = profile_clock::now();
         if (!FinishDataXfer(&contexts[read_index])) break;
+        if (profile_sample) {
+            const auto stage_end = profile_clock::now();
+            profile_usb_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                stage_end - stage_start).count();
+            stage_start = stage_end;
+        }
 
         if (first_transfer) {
             WarnPrintln(TAG, "STARTUP USB 3/3: first Cypress transfer completed");
@@ -377,14 +404,66 @@ void fx3handler::AdcSamplesProcess()
 
         int16_t* destination = inputbuffer != nullptr ? inputbuffer->acquireWriteBlock() : nullptr;
         if (destination == nullptr) break;
+        if (profile_sample) {
+            const auto stage_end = profile_clock::now();
+            profile_ring_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                stage_end - stage_start).count();
+            stage_start = stage_end;
+        }
         std::memcpy(destination, buffers[read_index].data(), transferSize);
+        if (profile_sample) {
+            const auto stage_end = profile_clock::now();
+            profile_copy_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                stage_end - stage_start).count();
+            stage_start = stage_end;
+        }
         if (first_block) WarnPrintln(TAG, "STARTUP USB 4/6: first block copied to ring buffer");
         if (!inputbuffer->commitWriteBlock()) break;
+        if (profile_sample) {
+            const auto stage_end = profile_clock::now();
+            profile_commit_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                stage_end - stage_start).count();
+            stage_start = stage_end;
+        }
         if (first_block) WarnPrintln(TAG, "STARTUP USB 5/6: first ring-buffer block committed");
 
         if (!BeginDataXfer(buffers[read_index].data(), transferSize, &contexts[read_index])) {
             ErrorPrintln(TAG, "Unable to requeue USB transfer %zu", read_index);
             break;
+        }
+        if (profile_sample) {
+            const auto loop_end = profile_clock::now();
+            profile_requeue_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                loop_end - stage_start).count();
+            profile_loop_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                loop_end - loop_start).count();
+            profile_samples++;
+
+            if (profile_samples >= PROFILE_REPORT_SAMPLES) {
+                const auto avg_us = [](uint64_t ns, uint64_t count) {
+                    return count == 0 ? 0.0 : static_cast<double>(ns) / (1000.0 * count);
+                };
+                WarnPrintln(TAG,
+                    "PROFILE USB samples=%llu/%llu bytes=%ld avg_us usb_wait=%.1f ring_wait=%.1f copy=%.1f commit=%.1f requeue=%.1f loop=%.1f ring_full=%d",
+                    static_cast<unsigned long long>(profile_samples),
+                    static_cast<unsigned long long>(profile_transfers_seen),
+                    transferSize,
+                    avg_us(profile_usb_wait_ns, profile_samples),
+                    avg_us(profile_ring_wait_ns, profile_samples),
+                    avg_us(profile_copy_ns, profile_samples),
+                    avg_us(profile_commit_ns, profile_samples),
+                    avg_us(profile_requeue_ns, profile_samples),
+                    avg_us(profile_loop_ns, profile_samples),
+                    inputbuffer != nullptr ? inputbuffer->getFullCount() : -1);
+                profile_samples = 0;
+                profile_transfers_seen = 0;
+                profile_usb_wait_ns = 0;
+                profile_ring_wait_ns = 0;
+                profile_copy_ns = 0;
+                profile_commit_ns = 0;
+                profile_requeue_ns = 0;
+                profile_loop_ns = 0;
+            }
         }
         if (first_block) {
             WarnPrintln(TAG, "STARTUP USB 6/6: first Cypress request requeued");

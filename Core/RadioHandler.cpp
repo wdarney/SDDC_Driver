@@ -42,6 +42,18 @@ void RadioHandler::OnDataPacket()
 	auto len_real = real_buffer.getBlockSize();
 	auto len_iq   = iq_buffer.getBlockSize();
 	bool first_iq_block = true;
+	constexpr uint64_t PROFILE_SAMPLE_PERIOD = 17;
+	constexpr uint64_t PROFILE_REPORT_SAMPLES = 64;
+	const char* profile_request = std::getenv("SDDC_R2IQ_PROFILE");
+	const bool profile_enabled = profile_request != nullptr &&
+		profile_request[0] != '\0' && std::strcmp(profile_request, "0") != 0;
+	uint64_t profile_blocks_seen = 0;
+	uint64_t profile_samples = 0;
+	uint64_t profile_wait_ns = 0;
+	uint64_t profile_fine_tune_ns = 0;
+	uint64_t profile_callback_ns = 0;
+	uint64_t profile_release_ns = 0;
+	uint64_t profile_total_ns = 0;
 
 	//ringbuffer<>* source_buffer = r2iqEnabled ? &outputbuffer : &inputbuffer;
 
@@ -49,6 +61,12 @@ void RadioHandler::OnDataPacket()
 	{
 		if(r2iqEnabled)
 		{
+			const bool profile_sample = profile_enabled &&
+				(profile_blocks_seen++ % PROFILE_SAMPLE_PERIOD == 0);
+			std::chrono::steady_clock::time_point stage_start;
+			std::chrono::steady_clock::time_point total_start;
+			if (profile_sample)
+				stage_start = total_start = std::chrono::steady_clock::now();
 			const float* buf = iq_buffer.acquireReadBlock();
 
 			if (buf == nullptr)
@@ -58,19 +76,69 @@ void RadioHandler::OnDataPacket()
 				iq_buffer.releaseReadBlock();
 				break;
 			}
+			if (profile_sample) {
+				const auto stage_end = std::chrono::steady_clock::now();
+				profile_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+					stage_end - stage_start).count();
+				stage_start = stage_end;
+			}
 
 			if (fc != 0.0f)
 			{
 				std::unique_lock<std::mutex> lk(fc_mutex);
 				shift_limited_unroll_C_sse_inp_c((complexf*)buf, len_iq/2, stateFineTune);
 			}
+			if (profile_sample) {
+				const auto stage_end = std::chrono::steady_clock::now();
+				profile_fine_tune_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+					stage_end - stage_start).count();
+				stage_start = stage_end;
+			}
 
 			callbackIQ(callbackIQContext, (sddc_complex_t*)buf, len_iq/2);
+			if (profile_sample) {
+				const auto stage_end = std::chrono::steady_clock::now();
+				profile_callback_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+					stage_end - stage_start).count();
+				stage_start = stage_end;
+			}
 			if (first_iq_block) {
 				WarnPrintln(TAG, "STARTUP DSP: first IQ callback completed");
 				first_iq_block = false;
 			}
 			iq_buffer.releaseReadBlock();
+			if (profile_sample) {
+				const auto total_end = std::chrono::steady_clock::now();
+				profile_release_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+					total_end - stage_start).count();
+				profile_total_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+					total_end - total_start).count();
+				profile_samples++;
+
+				if (profile_samples >= PROFILE_REPORT_SAMPLES) {
+					const auto avg_us = [](uint64_t ns, uint64_t count) {
+						return count == 0 ? 0.0 : static_cast<double>(ns) / (1000.0 * count);
+					};
+					WarnPrintln(TAG,
+						"PROFILE OUTPUT samples=%llu/%llu iq_complex=%ld avg_us wait=%.1f fine_tune=%.1f callback=%.1f release=%.1f total=%.1f ring_empty=%d",
+						static_cast<unsigned long long>(profile_samples),
+						static_cast<unsigned long long>(profile_blocks_seen),
+						static_cast<long>(len_iq / 2),
+						avg_us(profile_wait_ns, profile_samples),
+						avg_us(profile_fine_tune_ns, profile_samples),
+						avg_us(profile_callback_ns, profile_samples),
+						avg_us(profile_release_ns, profile_samples),
+						avg_us(profile_total_ns, profile_samples),
+						iq_buffer.getEmptyCount());
+					profile_samples = 0;
+					profile_blocks_seen = 0;
+					profile_wait_ns = 0;
+					profile_fine_tune_ns = 0;
+					profile_callback_ns = 0;
+					profile_release_ns = 0;
+					profile_total_ns = 0;
+				}
+			}
 
 			count_iq_samples += len_iq/2;
 		}
