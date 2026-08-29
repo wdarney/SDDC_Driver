@@ -1,0 +1,33 @@
+name: Windows direct-ring SHDWN fixed
+
+on:
+  push:
+    branches: [wd/rx888-direct-ring-shdwn-fix]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+      - run: cmake -E make_directory ${{runner.workspace}}/build64-direct-ring-shdwn
+      - name: Configure
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-direct-ring-shdwn
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+      - name: Build
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-direct-ring-shdwn
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+      - name: SHA256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-direct-ring-shdwn/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-direct-ring-shdwn-fixed
+          path: ${{runner.workspace}}/build64-direct-ring-shdwn/SoapySDDC/Release/SDDCSupport.dll
