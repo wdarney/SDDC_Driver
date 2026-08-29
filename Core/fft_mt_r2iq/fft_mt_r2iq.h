@@ -4,6 +4,8 @@
 #include "../config.h"
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <cstdint>
 #include <string.h>
 #include <thread>
 #include <mutex>

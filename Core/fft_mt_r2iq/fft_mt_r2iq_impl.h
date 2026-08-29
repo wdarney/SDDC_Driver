@@ -32,6 +32,15 @@
     // Fixed overlap storage avoids constructing a vector on every input block.
     std::array<int16_t, BASE_FFT_SCRAP_SIZE> last_block_end{};
 
+    // Diagnostic-only, once-per-second counters. These make a blank waterfall
+    // distinguishable as USB starvation, R2IQ backlog, or downstream backlog
+    // without changing the processing or ownership path.
+    auto telemetry_start = std::chrono::steady_clock::now();
+    uint64_t telemetry_input_blocks = 0;
+    uint64_t telemetry_output_blocks = 0;
+    int telemetry_input_full = inputbuffer->getFullCount();
+    int telemetry_output_full = outputbuffer->getFullCount();
+
     while(r2iqOn)
     {
         input_current_block = inputbuffer->acquireReadBlock();
@@ -248,11 +257,37 @@
         if (decimate_count == 0) {
             assert(output_buffer_offset == output_complex_capacity);
             outputbuffer->commitWriteBlock();
+            ++telemetry_output_blocks;
             iq_output = nullptr;
             output_buffer_offset = 0;
         }
 
         inputbuffer->releaseReadBlock();
+        ++telemetry_input_blocks;
+
+        const auto telemetry_now = std::chrono::steady_clock::now();
+        const std::chrono::duration<double> telemetry_elapsed = telemetry_now - telemetry_start;
+        if (telemetry_elapsed.count() >= 1.0)
+        {
+            const int current_input_full = inputbuffer->getFullCount();
+            const int current_output_full = outputbuffer->getFullCount();
+            const double raw_msps = telemetry_input_blocks * inputbuffer_block_size /
+                telemetry_elapsed.count() / 1000000.0;
+            const double iq_msps = telemetry_output_blocks * output_complex_capacity /
+                telemetry_elapsed.count() / 1000000.0;
+            WarnPrintln(TAG,
+                "R2IQ RATE: raw=%.2f MS/s IQ=%.2f MS/s blocks=%llu/%llu inFull=+%d outFull=+%d",
+                raw_msps, iq_msps,
+                static_cast<unsigned long long>(telemetry_input_blocks),
+                static_cast<unsigned long long>(telemetry_output_blocks),
+                current_input_full - telemetry_input_full,
+                current_output_full - telemetry_output_full);
+            telemetry_start = telemetry_now;
+            telemetry_input_blocks = 0;
+            telemetry_output_blocks = 0;
+            telemetry_input_full = current_input_full;
+            telemetry_output_full = current_output_full;
+        }
     }
     return 0;
 }

@@ -394,10 +394,14 @@ void fx3handler::AdcSamplesProcess()
     size_t read_index = 0;
     size_t completed_transfers = 0;
     bool first_block = true;
+    auto telemetry_start = std::chrono::steady_clock::now();
+    size_t telemetry_transfers = 0;
+    int telemetry_input_full = inputbuffer != nullptr ? inputbuffer->getFullCount() : 0;
     while (run.load()) {
         if (!FinishDataXfer(&contexts[read_index])) break;
 
         ++completed_transfers;
+        ++telemetry_transfers;
         if (completed_transfers == 1) {
             WarnPrintln(TAG, "STARTUP USB 3/3: first Cypress transfer completed");
         }
@@ -421,6 +425,21 @@ void fx3handler::AdcSamplesProcess()
             first_block = false;
         }
         read_index = (read_index + 1) % USB_READ_CONCURRENT;
+
+        const auto telemetry_now = std::chrono::steady_clock::now();
+        const std::chrono::duration<double> telemetry_elapsed = telemetry_now - telemetry_start;
+        if (telemetry_elapsed.count() >= 1.0) {
+            const int current_input_full = inputbuffer != nullptr ? inputbuffer->getFullCount() : 0;
+            const double raw_msps = telemetry_transfers * transferSamples /
+                telemetry_elapsed.count() / 1000000.0;
+            WarnPrintln(TAG, "USB RATE: raw=%.2f MS/s transfers=%llu inFull=+%d",
+                raw_msps,
+                static_cast<unsigned long long>(telemetry_transfers),
+                current_input_full - telemetry_input_full);
+            telemetry_start = telemetry_now;
+            telemetry_transfers = 0;
+            telemetry_input_full = current_input_full;
+        }
     }
 
     run = false;

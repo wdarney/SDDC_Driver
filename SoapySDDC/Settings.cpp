@@ -429,7 +429,7 @@ void SoapySDDC::setSampleRate(const int, const size_t, const double rate)
     }
 
     configuredSampleRate = rate;
-    DebugPrintln(TAG, "RX888 MkII sample-rate plan: ADC=%u Hz, decimation=%d, IQ=%.0f Hz",
+    WarnPrintln(TAG, "RATE PLAN: actual ADC=%u Hz, decimation=%d, IQ=%.0f Hz",
         adc_rate, 1 << decimation, configuredSampleRate);
 }
 
