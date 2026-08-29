@@ -37,6 +37,7 @@ struct ReadContext {
     uint8_t* buffer = nullptr;
     long size = 0;
     bool buffered = false;
+    bool pending = false;
 };
 
 static_assert(offsetof(ReadContext, transfer) ==
@@ -331,7 +332,8 @@ bool fx3handler::BeginDataXfer(uint8_t* buffer, long size, void** context)
     read->size = size;
     read->buffered = endpoint->XferMode == XMODE_BUFFERED;
     read->cy_context = endpoint->BeginDataXfer(buffer, size, &read->overlap);
-    return read->cy_context != nullptr && endpoint->NtStatus == 0 && endpoint->UsbdStatus == 0;
+    read->pending = read->cy_context != nullptr && endpoint->NtStatus == 0 && endpoint->UsbdStatus == 0;
+    return read->pending;
 }
 
 bool fx3handler::FinishDataXfer(void** context)
@@ -346,6 +348,7 @@ bool fx3handler::FinishDataXfer(void** context)
     long actual = read->size;
     const bool finished = endpoint->FinishDataXfer(
         read->buffer, actual, &read->overlap, read->cy_context);
+    read->pending = false;
     if (read->buffered) {
         delete[] read->cy_context;
         read->cy_context = nullptr;
@@ -355,6 +358,40 @@ bool fx3handler::FinishDataXfer(void** context)
         WarnPrintln(TAG, "Short USB transfer: received %ld of %ld bytes", actual, read->size);
         return false;
     }
+    return true;
+}
+
+static bool CancelAndReapDataXfer(CCyUSBEndPoint* endpoint, void** context, size_t index)
+{
+    if (endpoint == nullptr || context == nullptr || *context == nullptr) return true;
+    auto* read = static_cast<ReadContext*>(*context);
+    if (!read->pending) return true;
+
+    // CancelIoEx is request-specific and, unlike AbortPipe, does not imply that
+    // the OVERLAPPED has completed. Keep its event, context, and data buffer
+    // alive until GetOverlappedResult has reaped the canceled request.
+    if (!CancelIoEx(endpoint->hDevice, &read->overlap)) {
+        const DWORD cancel_error = GetLastError();
+        if (cancel_error != ERROR_NOT_FOUND) {
+            WarnPrintln(TAG, "SHUTDOWN USB: CancelIoEx request %zu failed (error %lu)",
+                index, cancel_error);
+        }
+    }
+
+    const DWORD wait_result = WaitForSingleObject(read->overlap.hEvent, 2000);
+    if (wait_result != WAIT_OBJECT_0) {
+        ErrorPrintln(TAG, "SHUTDOWN USB: request %zu did not complete after cancellation (wait 0x%08lX)",
+            index, wait_result);
+        return false;
+    }
+
+    DWORD transferred = 0;
+    const BOOL completed = GetOverlappedResult(
+        endpoint->hDevice, &read->overlap, &transferred, FALSE);
+    const DWORD completion_error = completed ? ERROR_SUCCESS : GetLastError();
+    read->pending = false;
+    WarnPrintln(TAG, "SHUTDOWN USB: request %zu reaped (completed=%d error=%lu bytes=%lu)",
+        index, completed ? 1 : 0, completion_error, transferred);
     return true;
 }
 
@@ -443,9 +480,12 @@ void fx3handler::AdcSamplesProcess()
         }
     }
 
-    run = false;
-    if (endpoint != nullptr) endpoint->Abort();
-    for (auto& context : contexts) CleanupDataXfer(&context);
+    const bool failed_while_running = run.exchange(false);
+    if (failed_while_running && endpoint != nullptr) endpoint->Abort();
+    for (size_t i = 0; i < contexts.size(); ++i) {
+        CancelAndReapDataXfer(endpoint, &contexts[i], i);
+        CleanupDataXfer(&contexts[i]);
+    }
 }
 
 void fx3handler::StartStream(ringbuffer<int16_t>& input)
@@ -460,7 +500,11 @@ void fx3handler::StartStream(ringbuffer<int16_t>& input)
 void fx3handler::StopStream()
 {
     run = false;
+    if (!adc_samples_thread.joinable()) {
+        inputbuffer = nullptr;
+        return;
+    }
     if (endpoint != nullptr) endpoint->Abort();
-    if (adc_samples_thread.joinable()) adc_samples_thread.join();
+    adc_samples_thread.join();
     inputbuffer = nullptr;
 }
