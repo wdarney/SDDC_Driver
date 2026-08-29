@@ -73,7 +73,7 @@
 #endif
         if (!this->getRand())        // plain samples no ADC rand set
         {
-            convert_float<false>(
+            r2iq_convert_float<false>(
                 /*source=*/last_block_end.data(),
                 /*dest=*/th->ADCinTime,
                 /*len=*/BASE_FFT_SCRAP_SIZE
@@ -85,7 +85,7 @@
             blockMinMax.first = *minmax.first;
             blockMinMax.second = *minmax.second;
 #endif
-            convert_float<false>(
+            r2iq_convert_float<false>(
                 /*source=*/input_current_block,
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
@@ -95,14 +95,14 @@
         }
         else
         {
-            convert_float<true>(
+            r2iq_convert_float<true>(
                 /*source=*/last_block_end.data(),
                 /*dest=*/th->ADCinTime,
                 /*len=*/BASE_FFT_SCRAP_SIZE
             );
             if (first_input_block)
                 WarnPrintln(TAG, "STARTUP DSP: first randomized overlap converted");
-            convert_float<true>(
+            r2iq_convert_float<true>(
                 /*source=*/input_current_block,
                 /*dest=*/th->ADCinTime + BASE_FFT_SCRAP_SIZE,
                 /*len=*/inputbuffer_block_size
@@ -178,7 +178,7 @@
                 // circular shift (mixing in full bins) and low/bandpass filtering (complex multiplication)
                 {
                     // circular shift tune fs/2 first half array into th->inFreqTmp[]
-                    shift_freq(
+                    r2iq_shift_freq(
                         /*destination=*/th->inFreqTmp,
                         /*source1=*/upper_frequencies_source,
                         /*source2=*/filter,
@@ -191,7 +191,7 @@
                         memset(th->inFreqTmp[upper_frequencies_len], 0, (fft_output_half_size - upper_frequencies_len) * sizeof(fftwf_complex));
 
                     // circular shift tune fs/2 second half array
-                    shift_freq(
+                    r2iq_shift_freq(
                         /*destination=*/&th->inFreqTmp[fft_output_half_size],
                         /*source1=*/lower_frequencies_source,
                         /*source2=*/filter2,
@@ -233,12 +233,12 @@
             if (this->getSideband()) // lower sideband
             {
                 // mirror just by negating the imaginary Q of complex I/Q
-                copy<true>((fftwf_complex*)&iq_output[destination_offset * 2],
+                r2iq_copy<true>((fftwf_complex*)&iq_output[destination_offset * 2],
                     &th->inFreqTmp[0], fft_useful_size);
             }
             else // upper sideband
             {
-                copy<false>((fftwf_complex*)&iq_output[destination_offset * 2],
+                r2iq_copy<false>((fftwf_complex*)&iq_output[destination_offset * 2],
                     &th->inFreqTmp[0], fft_useful_size);
             }
         }
