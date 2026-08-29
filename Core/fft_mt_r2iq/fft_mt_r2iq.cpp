@@ -196,10 +196,12 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 	processor_count = std::thread::hardware_concurrency();
 	DebugPrintln(TAG, "Maximum available threads: %d", processor_count);
 
-	// Match the previously validated chunk-worker design: leave one logical
-	// CPU available for USB, submission, and the host application.
-	if (processor_count > 1)
-		processor_count--;
+	// Native RX888 testing on the four-core Windows target found that two
+	// workers retain the parallel R2IQ headroom with essentially the same
+	// process CPU load as one worker. Keep higher counts opt-in through
+	// SDDC_R2IQ_WORKERS so USB, submission, and the host UI retain capacity.
+	if (processor_count > 2)
+		processor_count = 2;
 	if (processor_count > N_MAX_R2IQ_THREADS)
 		processor_count = N_MAX_R2IQ_THREADS;
 	if (processor_count == 0)
