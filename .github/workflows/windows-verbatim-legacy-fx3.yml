@@ -1,0 +1,51 @@
+name: Windows verbatim legacy FX3 backend diagnostic
+
+on:
+  push:
+    branches:
+      - wd/windows-historical-cyapi-lifecycle
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore legacy Windows FX3 backend from 331b35cd
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wdarney/SDDC_Driver/331b35cd619bf4af20444d64dc35b13a474493e6/Core/arch/win32/FX3handler.cpp" -OutFile "Core/arch/win32/FX3handler.cpp"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wdarney/SDDC_Driver/331b35cd619bf4af20444d64dc35b13a474493e6/Core/arch/win32/FX3handler.h" -OutFile "Core/arch/win32/FX3handler.h"
+
+      - name: Show transplanted backend diff
+        shell: bash
+        run: git diff -- Core/arch/win32/FX3handler.cpp Core/arch/win32/FX3handler.h
+
+      - name: Install vcpkg dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+
+      - name: Create x64 build environment
+        run: cmake -E make_directory ${{runner.workspace}}/build64-legacyfx3
+
+      - name: Configure x64 module
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-legacyfx3
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+
+      - name: Build x64 SDDCSupport
+        working-directory: ${{runner.workspace}}/build64-legacyfx3
+        shell: bash
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+
+      - name: SHA256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-legacyfx3/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-verbatim-legacy-fx3
+          path: ${{runner.workspace}}/build64-legacyfx3/SoapySDDC/Release/SDDCSupport.dll
