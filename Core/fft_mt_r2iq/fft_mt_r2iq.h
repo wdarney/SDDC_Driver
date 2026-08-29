@@ -22,6 +22,44 @@ static const int BASE_FFT_SCRAP_SIZE = 2048;
 static const int BASE_FFT_SIZE = FFTN_R_ADC + BASE_FFT_SCRAP_SIZE;
 static const int BASE_FFT_HALF_SIZE = BASE_FFT_SIZE / 2;
 
+// These helpers are compiled once per SIMD implementation translation unit.
+// Internal linkage is required: compiling one shared inline member under
+// /arch:AVX, /arch:AVX2, and /arch:AVX512 gives every copy the same COMDAT
+// name, allowing MSVC's linker to select the AVX-512 copy for lower kernels.
+template<bool rand>
+static inline void r2iq_convert_float(const int16_t* input, float* output, int size)
+{
+    for (int m = 0; m < size; m++)
+    {
+        int16_t val;
+        if (rand && (input[m] & 1))
+            val = input[m] ^ (-2);
+        else
+            val = input[m];
+        output[m] = float(val);
+    }
+}
+
+static inline void r2iq_shift_freq(fftwf_complex* dest, const fftwf_complex* source1,
+    const fftwf_complex* source2, int start, int end)
+{
+    for (int m = start; m < end; m++)
+    {
+        dest[m][0] = source1[m][0] * source2[m][0] - source1[m][1] * source2[m][1];
+        dest[m][1] = source1[m][1] * source2[m][0] + source1[m][0] * source2[m][1];
+    }
+}
+
+template<bool flip>
+static inline void r2iq_copy(fftwf_complex* dest, const fftwf_complex* source, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        dest[i][0] = source[i][0];
+        dest[i][1] = flip ? -source[i][1] : source[i][1];
+    }
+}
+
 struct r2iqThreadArg;
 
 class fft_mt_r2iq
@@ -56,56 +94,6 @@ public:
     bool getSideband() const { return this->useSidebandLSB; }
 
     float setFreqOffset(float offset);
-
-protected:
-
-    template<bool rand> void convert_float(const int16_t *input, float* output, int size)
-    {
-        for(int m = 0; m < size; m++)
-        {
-            int16_t val;
-            if (rand && (input[m] & 1))
-            {
-                val = input[m] ^ (-2);
-            }
-            else
-            {
-                val = input[m];
-            }
-            output[m] = float(val);
-        }
-    }
-
-    void shift_freq(fftwf_complex* dest, const fftwf_complex* source1, const fftwf_complex* source2, int start, int end)
-    {
-        for (int m = start; m < end; m++)
-        {
-            // besides circular shift, do complex multiplication with the lowpass filter's spectrum
-            // (a+ib)(c+id) = (ac - bd) + i(ad + bc)
-            dest[m][0] = source1[m][0] * source2[m][0] - source1[m][1] * source2[m][1];
-            dest[m][1] = source1[m][1] * source2[m][0] + source1[m][0] * source2[m][1];
-        }
-    }
-
-    template<bool flip> void copy(fftwf_complex* dest, const fftwf_complex* source, int count)
-    {
-        if (flip)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                dest[i][0] = source[i][0];
-                dest[i][1] = -source[i][1];
-            }
-        }
-        else
-        {
-            for (int i = 0; i < count; i++)
-            {
-                dest[i][0] = source[i][0];
-                dest[i][1] = source[i][1];
-            }
-        }
-    }
 
 private:
     bool r2iqOn;        // r2iq on flag
