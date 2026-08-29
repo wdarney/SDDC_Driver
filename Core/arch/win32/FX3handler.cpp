@@ -373,10 +373,11 @@ void fx3handler::CleanupDataXfer(void** context)
 void fx3handler::AdcSamplesProcess()
 {
     WarnPrintln(TAG, "STARTUP USB 1/3: Cypress receive thread entered");
+    std::array<std::vector<uint8_t>, USB_READ_CONCURRENT> buffers;
     std::array<void*, USB_READ_CONCURRENT> contexts {};
     for (size_t i = 0; i < USB_READ_CONCURRENT; ++i) {
-        auto* destination = reinterpret_cast<uint8_t*>(inputbuffer->peekWritePtr(i));
-        if (!BeginDataXfer(destination, transferSize, &contexts[i])) {
+        buffers[i].resize(transferSize);
+        if (!BeginDataXfer(buffers[i].data(), transferSize, &contexts[i])) {
             ErrorPrintln(TAG, "Unable to queue initial USB transfer %zu", i);
             run = false;
             break;
@@ -404,14 +405,14 @@ void fx3handler::AdcSamplesProcess()
             WarnPrintln(TAG, "STARTUP USB: second Cypress transfer completed");
         }
 
-        if (inputbuffer == nullptr) break;
-        if (first_block) WarnPrintln(TAG, "STARTUP USB 4/6: first block received directly into ring buffer");
+        int16_t* destination = inputbuffer != nullptr ? inputbuffer->acquireWriteBlock() : nullptr;
+        if (destination == nullptr) break;
+        std::memcpy(destination, buffers[read_index].data(), transferSize);
+        if (first_block) WarnPrintln(TAG, "STARTUP USB 4/6: first block copied to ring buffer");
         if (!inputbuffer->commitWriteBlock()) break;
         if (first_block) WarnPrintln(TAG, "STARTUP USB 5/6: first ring-buffer block committed");
 
-        auto* destination = reinterpret_cast<uint8_t*>(
-            inputbuffer->peekWritePtr(USB_READ_CONCURRENT - 1));
-        if (!BeginDataXfer(destination, transferSize, &contexts[read_index])) {
+        if (!BeginDataXfer(buffers[read_index].data(), transferSize, &contexts[read_index])) {
             ErrorPrintln(TAG, "Unable to requeue USB transfer %zu", read_index);
             break;
         }
