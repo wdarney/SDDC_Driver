@@ -153,6 +153,7 @@ public:
     int samplerateidx;
 
     double masterClockRate;
+    double configuredSampleRate = 0.0;
 };
 
 
