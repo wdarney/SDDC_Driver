@@ -1,8 +1,8 @@
-name: Windows RX888 R2IQ stage profile
+name: Windows RX888 R2IQ stage profile v2
 
 on:
   push:
-    branches: [wd/rx888-win-r2iq-stage-profile]
+    branches: [wd/rx888-win-r2iq-stage-profile-v2]
   workflow_dispatch:
 
 env:
@@ -55,5 +55,5 @@ jobs:
           Get-FileHash "${{runner.workspace}}/build64-r2iq-profile/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
       - uses: actions/upload-artifact@v4
         with:
-          name: SDDCSupport-Windows-x64-r2iq-stage-profile
+          name: SDDCSupport-Windows-x64-r2iq-stage-profile-v2
           path: ${{runner.workspace}}/build64-r2iq-profile/SoapySDDC/Release/SDDCSupport.dll

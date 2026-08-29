@@ -442,23 +442,30 @@
                     return fft_cpu_ns == 0 ? 0.0 : 100.0 * static_cast<double>(ns) / fft_cpu_ns;
                 };
 
-                WarnPrintln(TAG,
-                    "PROFILE R2IQ samples=%llu/%llu chunks=%llu workers=%u decim=%d avg_us input_wait=%.1f output_wait=%.1f clear=%.1f convert=%.1f overlap=%.1f fft_wall=%.1f worker_wait=%.1f active=%.1f fft_cpu_us forward=%.1f(%.1f%%) shift=%.1f(%.1f%%) inverse=%.1f(%.1f%%) copy=%.1f(%.1f%%)",
+                WarnPrintln(TAG, "PROFILE R2IQ BASE samples=%llu/%llu chunks=%llu",
                     static_cast<unsigned long long>(profile_samples),
                     static_cast<unsigned long long>(profile_blocks_seen),
-                    static_cast<unsigned long long>(chunks),
-                    processor_count, decimation,
+                    static_cast<unsigned long long>(chunks));
+                WarnPrintln(TAG, "PROFILE R2IQ MODE workers=%u decim=%d",
+                    processor_count, decimation);
+                WarnPrintln(TAG, "PROFILE R2IQ WAIT input=%.1f output=%.1f clear=%.1f",
                     avg_us(profile_input_wait_ns, profile_samples),
                     avg_us(profile_output_wait_ns, profile_output_acquires),
-                    avg_us(profile_clear_ns, profile_clear_events),
+                    avg_us(profile_clear_ns, profile_clear_events));
+                WarnPrintln(TAG, "PROFILE R2IQ PREP convert=%.1f overlap=%.1f active=%.1f",
                     avg_us(profile_convert_ns, profile_samples),
                     avg_us(profile_overlap_ns, profile_samples),
+                    avg_us(profile_active_ns, profile_samples));
+                WarnPrintln(TAG, "PROFILE R2IQ WALL fft=%.1f worker_wait=%.1f",
                     avg_us(profile_fft_wall_ns, profile_samples),
-                    avg_us(profile_worker_wait_ns, profile_samples),
-                    avg_us(profile_active_ns, profile_samples),
-                    avg_us(forward_ns, profile_samples), pct(forward_ns),
-                    avg_us(shift_ns, profile_samples), pct(shift_ns),
-                    avg_us(inverse_ns, profile_samples), pct(inverse_ns),
+                    avg_us(profile_worker_wait_ns, profile_samples));
+                WarnPrintln(TAG, "PROFILE R2IQ FORWARD us=%.1f pct=%.1f",
+                    avg_us(forward_ns, profile_samples), pct(forward_ns));
+                WarnPrintln(TAG, "PROFILE R2IQ SHIFT us=%.1f pct=%.1f",
+                    avg_us(shift_ns, profile_samples), pct(shift_ns));
+                WarnPrintln(TAG, "PROFILE R2IQ INVERSE us=%.1f pct=%.1f",
+                    avg_us(inverse_ns, profile_samples), pct(inverse_ns));
+                WarnPrintln(TAG, "PROFILE R2IQ COPY us=%.1f pct=%.1f",
                     avg_us(copy_ns, profile_samples), pct(copy_ns));
 
                 profile_samples = 0;

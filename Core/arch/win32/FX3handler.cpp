@@ -443,15 +443,17 @@ void fx3handler::AdcSamplesProcess()
                 const auto avg_us = [](uint64_t ns, uint64_t count) {
                     return count == 0 ? 0.0 : static_cast<double>(ns) / (1000.0 * count);
                 };
-                WarnPrintln(TAG,
-                    "PROFILE USB samples=%llu/%llu bytes=%ld avg_us usb_wait=%.1f ring_wait=%.1f copy=%.1f commit=%.1f requeue=%.1f loop=%.1f ring_full=%d",
+                WarnPrintln(TAG, "PROFILE USB BASE samples=%llu/%llu bytes=%ld",
                     static_cast<unsigned long long>(profile_samples),
                     static_cast<unsigned long long>(profile_transfers_seen),
-                    transferSize,
+                    transferSize);
+                WarnPrintln(TAG, "PROFILE USB WAIT usb=%.1f ring=%.1f",
                     avg_us(profile_usb_wait_ns, profile_samples),
-                    avg_us(profile_ring_wait_ns, profile_samples),
+                    avg_us(profile_ring_wait_ns, profile_samples));
+                WarnPrintln(TAG, "PROFILE USB MOVE copy=%.1f commit=%.1f",
                     avg_us(profile_copy_ns, profile_samples),
-                    avg_us(profile_commit_ns, profile_samples),
+                    avg_us(profile_commit_ns, profile_samples));
+                WarnPrintln(TAG, "PROFILE USB QUEUE requeue=%.1f loop=%.1f full=%d",
                     avg_us(profile_requeue_ns, profile_samples),
                     avg_us(profile_loop_ns, profile_samples),
                     inputbuffer != nullptr ? inputbuffer->getFullCount() : -1);

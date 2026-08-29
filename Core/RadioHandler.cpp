@@ -119,14 +119,15 @@ void RadioHandler::OnDataPacket()
 					const auto avg_us = [](uint64_t ns, uint64_t count) {
 						return count == 0 ? 0.0 : static_cast<double>(ns) / (1000.0 * count);
 					};
-					WarnPrintln(TAG,
-						"PROFILE OUTPUT samples=%llu/%llu iq_complex=%ld avg_us wait=%.1f fine_tune=%.1f callback=%.1f release=%.1f total=%.1f ring_empty=%d",
+					WarnPrintln(TAG, "PROFILE OUTPUT BASE samples=%llu/%llu iq=%ld",
 						static_cast<unsigned long long>(profile_samples),
 						static_cast<unsigned long long>(profile_blocks_seen),
-						static_cast<long>(len_iq / 2),
+						static_cast<long>(len_iq / 2));
+					WarnPrintln(TAG, "PROFILE OUTPUT WORK wait=%.1f fine=%.1f callback=%.1f",
 						avg_us(profile_wait_ns, profile_samples),
 						avg_us(profile_fine_tune_ns, profile_samples),
-						avg_us(profile_callback_ns, profile_samples),
+						avg_us(profile_callback_ns, profile_samples));
+					WarnPrintln(TAG, "PROFILE OUTPUT END release=%.1f total=%.1f empty=%d",
 						avg_us(profile_release_ns, profile_samples),
 						avg_us(profile_total_ns, profile_samples),
 						iq_buffer.getEmptyCount());
