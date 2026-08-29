@@ -13,8 +13,9 @@
 
 #include "../dsp/ringbuffer.h"
 
-// use up to this many threads
-#define N_MAX_R2IQ_THREADS 1
+// One coordinator preserves block overlap/output order while up to three
+// additional workers process independent FFT chunks from that block.
+#define N_MAX_R2IQ_THREADS 4
 #define PRINT_INPUT_RANGE  0
 #define NDECIDX 7 // Number of decimation steps
 
@@ -140,10 +141,6 @@ private:
 
     fftwf_complex **filterHw;       // Hw complex to each decimation ratio
 
-	fftwf_plan  plan_time2freq_r2c;      // fftw plan buffers Freq to Time complex to complex per decimation ratio
-	fftwf_plan *plan_freq2time;          // fftw plan buffers Time to Freq real to complex per buffer
-	fftwf_plan  plan_freq2time_per_decimation[NDECIDX];
-
     uint32_t processor_count;
     r2iqThreadArg* threadArgs[N_MAX_R2IQ_THREADS];
     std::thread r2iq_thread[N_MAX_R2IQ_THREADS]; // thread pointers
@@ -154,6 +151,12 @@ struct r2iqThreadArg {
 
 	r2iqThreadArg()
 	{
+		ADCinTime = nullptr;
+		ADCinFreq = nullptr;
+		inFreqTmp = nullptr;
+		plan_time2freq_r2c = nullptr;
+		for (int d = 0; d < NDECIDX; d++)
+			plan_freq2time_per_decimation[d] = nullptr;
 #if PRINT_INPUT_RANGE
 		MinMaxBlockCount = 0;
 		MinValue = 0;
@@ -165,6 +168,8 @@ struct r2iqThreadArg {
 	float *ADCinTime;         // point to each threads input buffers [nftt][n]
 	fftwf_complex *ADCinFreq; // buffers in frequency
 	fftwf_complex *inFreqTmp; // tmp decimation output buffers (after tune shift)
+	fftwf_plan plan_time2freq_r2c;
+	fftwf_plan plan_freq2time_per_decimation[NDECIDX];
 #if PRINT_INPUT_RANGE
 	int MinMaxBlockCount;
 	int16_t MinValue;

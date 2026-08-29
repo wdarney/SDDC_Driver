@@ -95,14 +95,11 @@ fft_mt_r2iq::~fft_mt_r2iq()
 	}
 	fftwf_free(filterHw);
 
-	fftwf_destroy_plan(plan_time2freq_r2c);
-	for (int d = 0; d < NDECIDX; d++)
-	{
-		fftwf_destroy_plan(plan_freq2time_per_decimation[d]);
-	}
-
 	for (unsigned t = 0; t < processor_count; t++) {
 		auto th = threadArgs[t];
+		fftwf_destroy_plan(th->plan_time2freq_r2c);
+		for (int d = 0; d < NDECIDX; d++)
+			fftwf_destroy_plan(th->plan_freq2time_per_decimation[d]);
 		fftwf_free(th->ADCinTime);
 		fftwf_free(th->ADCinFreq);
 		fftwf_free(th->inFreqTmp);
@@ -143,14 +140,12 @@ void fft_mt_r2iq::TurnOn() {
 	inputbuffer->Start();
 	outputbuffer->Start();
 
-	for (unsigned t = 0; t < processor_count; t++) {
-		r2iq_thread[t] = std::thread(
-			[this] (void* arg) {
-				return this->r2iqThreadf((r2iqThreadArg*)arg);
-			},
-			(void*)threadArgs[t]
-		);
-	}
+	r2iq_thread[0] = std::thread(
+		[this] (void* arg) {
+			return this->r2iqThreadf((r2iqThreadArg*)arg);
+		},
+		(void*)threadArgs[0]
+	);
 }
 
 void fft_mt_r2iq::TurnOff(void) {
@@ -161,9 +156,7 @@ void fft_mt_r2iq::TurnOff(void) {
 
 	inputbuffer->Stop();
 	outputbuffer->Stop();
-	for (unsigned t = 0; t < processor_count; t++) {
-		r2iq_thread[t].join();
-	}
+	r2iq_thread[0].join();
 }
 
 bool fft_mt_r2iq::IsOn(void) { return(this->r2iqOn); }
@@ -203,10 +196,25 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 	processor_count = std::thread::hardware_concurrency();
 	DebugPrintln(TAG, "Maximum available threads: %d", processor_count);
 
+	// Match the previously validated chunk-worker design: leave one logical
+	// CPU available for USB, submission, and the host application.
+	if (processor_count > 1)
+		processor_count--;
 	if (processor_count > N_MAX_R2IQ_THREADS)
 		processor_count = N_MAX_R2IQ_THREADS;
+	if (processor_count == 0)
+		processor_count = 1;
 
-	DebugPrintln(TAG, "Usable threads: %d", processor_count);
+	if (const char* requested = std::getenv("SDDC_R2IQ_WORKERS")) {
+		char* end = nullptr;
+		const long parsed = std::strtol(requested, &end, 10);
+		if (end != requested && *end == '\0' && parsed >= 1 && parsed <= N_MAX_R2IQ_THREADS)
+			processor_count = static_cast<uint32_t>(parsed);
+		else
+			WarnPrintln(TAG, "Ignoring invalid SDDC_R2IQ_WORKERS='%s' (expected 1..%d)", requested, N_MAX_R2IQ_THREADS);
+	}
+
+	WarnPrintln(TAG, "R2IQ chunk workers: %d", processor_count);
 
 	{
 		fftwf_plan filterplan_t2f_c2c; // time to frequency fft
@@ -265,18 +273,16 @@ void fft_mt_r2iq::Init(float gain, ringbuffer<int16_t> *input, ringbuffer<float>
 
 			th->ADCinFreq = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex)*(BASE_FFT_HALF_SIZE + 1)); // 1024+1
 			th->inFreqTmp = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex)*(BASE_FFT_HALF_SIZE));    // 1024
+
+			th->plan_time2freq_r2c = fftwf_plan_dft_r2c_1d(
+				BASE_FFT_SIZE, th->ADCinTime, th->ADCinFreq, FFTW_MEASURE);
+			for (int d = 0; d < NDECIDX; d++)
+				th->plan_freq2time_per_decimation[d] = fftwf_plan_dft_1d(
+					fft_size_per_decimation[d], th->inFreqTmp, th->inFreqTmp,
+					FFTW_BACKWARD, FFTW_MEASURE);
 		}
 		DebugPrintln(TAG, "Generated argument sets for the threads");
-
-		plan_time2freq_r2c = fftwf_plan_dft_r2c_1d(/*real_length=*/BASE_FFT_SIZE, /*in=*/threadArgs[0]->ADCinTime, /*out=*/threadArgs[0]->ADCinFreq, /*flags=*/FFTW_MEASURE);
-		DebugPrintln(TAG, "Generated FFTW real to IQ plan");
-
-		for (int d = 0; d < NDECIDX; d++)
-		{
-			// Generate inverse FFT plans for each decimation steps
-			plan_freq2time_per_decimation[d] = fftwf_plan_dft_1d(fft_size_per_decimation[d], threadArgs[0]->inFreqTmp, threadArgs[0]->inFreqTmp, FFTW_BACKWARD, FFTW_MEASURE);
-		}
-		DebugPrintln(TAG, "Generated %d IFFT plans", NDECIDX);
+		DebugPrintln(TAG, "Generated per-worker FFTW plans");
 	}
 
 	DebugPrintln(TAG, "Initialization done");
