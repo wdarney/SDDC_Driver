@@ -1,0 +1,129 @@
+name: Windows adapted legacy CyAPI transfer backend
+
+on:
+  push:
+    branches: [wd/windows-historical-cyapi-lifecycle]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Replace only current CyAPI transfer engine with legacy semantics
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('Core/arch/win32/FX3handler.cpp')
+          s = p.read_text()
+          start = s.index('bool fx3handler::BeginDataXfer')
+          end = s.index('\nvoid fx3handler::StopStream()', start)
+          stop_end = s.index('\n}', end) + 2
+          legacy = r'''bool fx3handler::BeginDataXfer(uint8_t* buffer, long size, void** context)
+          {
+              if (endpoint == nullptr || context == nullptr) return false;
+              auto* read = static_cast<ReadContext*>(*context);
+              if (read == nullptr) {
+                  read = new ReadContext;
+                  *context = read;
+                  memset(&read->overlap, 0, sizeof(read->overlap));
+                  read->overlap.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+              }
+              read->buffer = buffer;
+              read->size = size;
+              read->cy_context = endpoint->BeginDataXfer(read->buffer, size, &read->overlap);
+              if (endpoint->NtStatus || endpoint->UsbdStatus) return false;
+              return true;
+          }
+
+          bool fx3handler::FinishDataXfer(void** context)
+          {
+              auto* read = static_cast<ReadContext*>(*context);
+              if (read == nullptr || endpoint == nullptr) return false;
+              if (!endpoint->WaitForXfer(&read->overlap, 80)) {
+                  WarnPrintln(TAG, "LEGACY USB: WaitForXfer timeout; aborting endpoint");
+                  endpoint->Abort();
+                  return false;
+              }
+              const long requested = read->size;
+              if (!endpoint->FinishDataXfer(read->buffer, read->size, &read->overlap, read->cy_context)) return false;
+              if (read->size < requested) WarnPrintln(TAG, "LEGACY USB: short transfer %ld/%ld", read->size, requested);
+              return true;
+          }
+
+          void fx3handler::CleanupDataXfer(void** context)
+          {
+              if (context == nullptr || *context == nullptr) return;
+              auto* read = static_cast<ReadContext*>(*context);
+              CloseHandle(read->overlap.hEvent);
+              delete read;
+              *context = nullptr;
+          }
+
+          void fx3handler::AdcSamplesProcess()
+          {
+              WarnPrintln(TAG, "LEGACY USB: receive thread entered");
+              void* contexts[USB_READ_CONCURRENT] = {};
+              for (size_t n = 0; n < USB_READ_CONCURRENT; ++n) {
+                  auto* ptr = inputbuffer->peekWritePtr(static_cast<int>(n));
+                  if (!BeginDataXfer(reinterpret_cast<uint8_t*>(ptr), transferSize, &contexts[n])) return;
+              }
+              size_t read_idx = 0;
+              while (run.load()) {
+                  if (!FinishDataXfer(&contexts[read_idx])) break;
+                  if (!inputbuffer->commitWriteBlock()) break;
+                  auto* ptr = inputbuffer->peekWritePtr(static_cast<int>(USB_READ_CONCURRENT - 1));
+                  if (!BeginDataXfer(reinterpret_cast<uint8_t*>(ptr), transferSize, &contexts[read_idx])) break;
+                  read_idx = (read_idx + 1) % USB_READ_CONCURRENT;
+              }
+              for (size_t n = 0; n < USB_READ_CONCURRENT; ++n) CleanupDataXfer(&contexts[n]);
+              WarnPrintln(TAG, "LEGACY USB: receive thread exited");
+          }
+
+          void fx3handler::StartStream(ringbuffer<int16_t>& input)
+          {
+              inputbuffer = &input;
+              inputbuffer->setBlockSize(transferSamples);
+              run = true;
+              adc_samples_thread = std::thread([this]() { AdcSamplesProcess(); });
+          }
+
+          void fx3handler::StopStream()
+          {
+              if (!adc_samples_thread.joinable()) { run = false; inputbuffer = nullptr; return; }
+              WarnPrintln(TAG, "LEGACY USB: normal stop; waiting for natural transfer completion");
+              run = false;
+              adc_samples_thread.join();
+              inputbuffer = nullptr;
+              WarnPrintln(TAG, "LEGACY USB: stop complete");
+          }'''
+          s = s[:start] + legacy + s[stop_end:]
+          p.write_text(s)
+          print('Installed adapted 331b35cd transfer lifecycle; current Open/enumeration API retained')
+
+      - name: Show diagnostic diff
+        shell: bash
+        run: git diff -- Core/arch/win32/FX3handler.cpp
+
+      - name: Install dependencies
+        run: cd c:\vcpkg ; git pull ; vcpkg install soapysdr:x64-windows
+      - run: cmake -E make_directory ${{runner.workspace}}/build64-adaptedlegacy
+      - name: Configure
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-adaptedlegacy
+        run: cmake $GITHUB_WORKSPACE "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=$BUILD_TYPE -A x64
+      - name: Build
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-adaptedlegacy
+        run: cmake --build . --config $BUILD_TYPE --target SDDCSupport
+      - name: SHA256
+        shell: pwsh
+        run: Get-FileHash "${{runner.workspace}}/build64-adaptedlegacy/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-adapted-legacy-transfer
+          path: ${{runner.workspace}}/build64-adaptedlegacy/SoapySDDC/Release/SDDCSupport.dll
