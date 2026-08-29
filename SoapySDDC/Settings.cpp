@@ -25,6 +25,23 @@ constexpr std::array<uint32_t, 6> RX888_MKII_ADC_RATES = {
     32000000, 32000000, 32000000, 32000000, 64000000, 64000000
 };
 constexpr std::array<uint8_t, 6> RX888_MKII_DECIMATIONS = {4, 3, 2, 1, 1, 0};
+
+bool rx888MkIIPlanForAdc(uint32_t adc_rate, double iq_rate, uint8_t& decimation)
+{
+    if (iq_rate <= 0.0) return false;
+
+    const double ratio_value = adc_rate / (2.0 * iq_rate);
+    const auto ratio = static_cast<uint32_t>(std::llround(ratio_value));
+    if (ratio == 0 || std::abs(ratio_value - ratio) > 1e-6) return false;
+    if ((ratio & (ratio - 1)) != 0) return false;
+
+    uint8_t candidate = 0;
+    for (uint32_t value = ratio; value > 1; value >>= 1) ++candidate;
+    if (candidate >= NDECIDX) return false;
+
+    decimation = candidate;
+    return true;
+}
 }
 
 static void _Callback(void *context, const sddc_complex_t *data, uint32_t len)
@@ -409,8 +426,18 @@ void SoapySDDC::setSampleRate(const int, const size_t, const double rate)
     if (rate_index < 0)
         throw std::runtime_error("Unsupported RX888 MkII sample rate; use 1, 2, 4, 8, 16, or 32 MHz");
 
-    const uint32_t adc_rate = RX888_MKII_ADC_RATES[rate_index];
-    const uint8_t decimation = RX888_MKII_DECIMATIONS[rate_index];
+    uint32_t adc_rate = radio_handler->GetADCSampleRate();
+    uint8_t decimation = 0;
+
+    // SDR++ can select the ADC clock independently. Preserve that request when
+    // it maps exactly to the requested complex rate through a power-of-two R2IQ
+    // decimation (for example 32/16, 64/32, or 128/32 MHz). Other Soapy clients
+    // retain the established automatic rate plan as a compatibility fallback.
+    if (!rx888MkIIPlanForAdc(adc_rate, rate, decimation))
+    {
+        adc_rate = RX888_MKII_ADC_RATES[rate_index];
+        decimation = RX888_MKII_DECIMATIONS[rate_index];
+    }
     sddc_err_t result = radio_handler->SetADCSampleRate(adc_rate);
     if (result != ERR_SUCCESS)
         throw std::runtime_error("Failed to set RX888 MkII ADC rate");
@@ -550,6 +577,18 @@ SoapySDR::ArgInfoList SoapySDDC::getSettingInfo(void) const
     rand.type = SoapySDR::ArgInfo::BOOL;
     setArgs.push_back(rand);
 
+    if (radio_handler->getHardwareModel() == RX888r2)
+    {
+        SoapySDR::ArgInfo adcFrequency;
+        adcFrequency.key = "adc_frequency";
+        adcFrequency.value = std::to_string(radio_handler->GetADCSampleRate());
+        adcFrequency.name = "ADC Clock";
+        adcFrequency.description = "RX888 MkII ADC clock in Hz; the IQ rate must be ADC/2 divided by a power of two";
+        adcFrequency.type = SoapySDR::ArgInfo::INT;
+        adcFrequency.range = SoapySDR::Range(16000000, 130000000);
+        setArgs.push_back(adcFrequency);
+    }
+
     return setArgs;
 }
 
@@ -584,6 +623,14 @@ void SoapySDDC::writeSetting(const std::string &key, const std::string &value)
     {
         bool rand = (value == "true") ? true : false;
         radio_handler->SetRand(rand);
+    }
+    else if(key == "adc_frequency")
+    {
+        const auto adc_rate = static_cast<uint32_t>(std::stoul(value));
+        const sddc_err_t result = radio_handler->SetADCSampleRate(adc_rate);
+        if (result != ERR_SUCCESS)
+            throw std::runtime_error("Failed to set RX888 MkII ADC clock");
+        WarnPrintln(TAG, "ADC REQUEST: applied %u Hz", radio_handler->GetADCSampleRate());
     }
 }
 
