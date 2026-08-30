@@ -4,6 +4,8 @@ on:
   # Trigger the workflow on push (all branches) or pull request (master only)
   # but only for the main branch
   push:
+    branches-ignore:
+      - wd/rx888-win-runtime-telemetry
   pull_request:
     branches:
       - master

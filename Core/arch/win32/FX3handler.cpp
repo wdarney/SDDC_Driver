@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../../config.h"
+#include "../../RuntimeTelemetry.h"
 #include "FX3handler.h"
 #include "CyAPI/CyAPI.h"
 #include "CyAPI/cyioctl.h"
@@ -367,8 +368,28 @@ void fx3handler::AdcSamplesProcess()
     size_t read_index = 0;
     bool first_transfer = true;
     bool first_block = true;
+    const bool telemetry_enabled = sddc::runtimeTelemetryEnabled();
+    auto telemetry_start = std::chrono::steady_clock::now();
+    uint64_t telemetry_clock_blocks = 0;
+    uint64_t telemetry_transfers = 0;
+    uint64_t telemetry_usb_errors = 0;
+    int telemetry_input_full = inputbuffer != nullptr ? inputbuffer->getFullCount() : 0;
+    if (telemetry_enabled) {
+        WarnPrintln(TAG,
+            "TELEM enabled: USB rate/ring report every %.0f second",
+            sddc::runtimeTelemetryReportSeconds);
+    }
     while (run.load()) {
-        if (!FinishDataXfer(&contexts[read_index])) break;
+        if (!FinishDataXfer(&contexts[read_index])) {
+            if (run.load()) {
+                ++telemetry_usb_errors;
+                if (telemetry_enabled)
+                    WarnPrintln(TAG, "TELEM USB transfer failed usbErr=+1");
+            }
+            break;
+        }
+        if (telemetry_enabled)
+            ++telemetry_transfers;
 
         if (first_transfer) {
             WarnPrintln(TAG, "STARTUP USB 3/3: first Cypress transfer completed");
@@ -383,7 +404,10 @@ void fx3handler::AdcSamplesProcess()
         if (first_block) WarnPrintln(TAG, "STARTUP USB 5/6: first ring-buffer block committed");
 
         if (!BeginDataXfer(buffers[read_index].data(), transferSize, &contexts[read_index])) {
+            ++telemetry_usb_errors;
             ErrorPrintln(TAG, "Unable to requeue USB transfer %zu", read_index);
+            if (telemetry_enabled)
+                WarnPrintln(TAG, "TELEM USB requeue failed usbErr=+1");
             break;
         }
         if (first_block) {
@@ -391,6 +415,29 @@ void fx3handler::AdcSamplesProcess()
             first_block = false;
         }
         read_index = (read_index + 1) % USB_READ_CONCURRENT;
+
+        if (telemetry_enabled &&
+            (++telemetry_clock_blocks % sddc::runtimeTelemetryClockSamplePeriod) == 0) {
+            const auto telemetry_now = std::chrono::steady_clock::now();
+            const std::chrono::duration<double> telemetry_elapsed =
+                telemetry_now - telemetry_start;
+            if (telemetry_elapsed.count() >= sddc::runtimeTelemetryReportSeconds) {
+                const int current_input_full = inputbuffer != nullptr ?
+                    inputbuffer->getFullCount() : 0;
+                const double raw_msps = telemetry_transfers * transferSamples /
+                    telemetry_elapsed.count() / 1000000.0;
+                WarnPrintln(TAG,
+                    "TELEM USB raw=%.2fMS/s xfers=%llu inFull=+%d usbErr=+%llu",
+                    raw_msps,
+                    static_cast<unsigned long long>(telemetry_transfers),
+                    current_input_full - telemetry_input_full,
+                    static_cast<unsigned long long>(telemetry_usb_errors));
+                telemetry_start = telemetry_now;
+                telemetry_transfers = 0;
+                telemetry_usb_errors = 0;
+                telemetry_input_full = current_input_full;
+            }
+        }
     }
 
     run = false;

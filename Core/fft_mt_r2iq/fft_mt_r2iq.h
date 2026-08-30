@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "../dsp/ringbuffer.h"
+#include "../RuntimeTelemetry.h"
 
 // One coordinator preserves block overlap/output order while up to three
 // additional workers process independent FFT chunks from that block.

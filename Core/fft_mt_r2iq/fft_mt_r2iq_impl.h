@@ -135,6 +135,21 @@
         });
     }
 
+    const bool telemetry_enabled = sddc::runtimeTelemetryEnabled();
+    auto telemetry_start = std::chrono::steady_clock::now();
+    uint64_t telemetry_clock_blocks = 0;
+    uint64_t telemetry_input_blocks = 0;
+    uint64_t telemetry_output_blocks = 0;
+    int telemetry_input_full = inputbuffer->getFullCount();
+    int telemetry_input_empty = inputbuffer->getEmptyCount();
+    int telemetry_output_full = outputbuffer->getFullCount();
+    int telemetry_output_empty = outputbuffer->getEmptyCount();
+    if (telemetry_enabled) {
+        WarnPrintln(TAG,
+            "TELEM enabled: R2IQ rate/ring report every %.0f second workers=%u",
+            sddc::runtimeTelemetryReportSeconds, processor_count);
+    }
+
     while(r2iqOn)
     {
         input_current_block = inputbuffer->acquireReadBlock();
@@ -283,11 +298,46 @@
         if (decimate_count == 0) {
             assert(output_buffer_offset == output_complex_capacity);
             outputbuffer->commitWriteBlock();
+            if (telemetry_enabled)
+                ++telemetry_output_blocks;
             iq_output = nullptr;
             output_buffer_offset = 0;
         }
 
         inputbuffer->releaseReadBlock();
+        if (telemetry_enabled)
+            ++telemetry_input_blocks;
+
+        if (telemetry_enabled &&
+            (++telemetry_clock_blocks % sddc::runtimeTelemetryClockSamplePeriod) == 0) {
+            const auto telemetry_now = std::chrono::steady_clock::now();
+            const std::chrono::duration<double> telemetry_elapsed =
+                telemetry_now - telemetry_start;
+            if (telemetry_elapsed.count() >= sddc::runtimeTelemetryReportSeconds) {
+                const int current_input_full = inputbuffer->getFullCount();
+                const int current_input_empty = inputbuffer->getEmptyCount();
+                const int current_output_full = outputbuffer->getFullCount();
+                const int current_output_empty = outputbuffer->getEmptyCount();
+                const double raw_msps = telemetry_input_blocks * inputbuffer_block_size /
+                    telemetry_elapsed.count() / 1000000.0;
+                const double iq_msps = telemetry_output_blocks * output_complex_capacity /
+                    telemetry_elapsed.count() / 1000000.0;
+                WarnPrintln(TAG,
+                    "TELEM R2IQ raw=%.2fMS/s iq=%.2fMS/s workers=%u inFull=+%d inEmpty=+%d outFull=+%d outEmpty=+%d",
+                    raw_msps, iq_msps, processor_count,
+                    current_input_full - telemetry_input_full,
+                    current_input_empty - telemetry_input_empty,
+                    current_output_full - telemetry_output_full,
+                    current_output_empty - telemetry_output_empty);
+                telemetry_start = telemetry_now;
+                telemetry_input_blocks = 0;
+                telemetry_output_blocks = 0;
+                telemetry_input_full = current_input_full;
+                telemetry_input_empty = current_input_empty;
+                telemetry_output_full = current_output_full;
+                telemetry_output_empty = current_output_empty;
+            }
+        }
     }
 
     {

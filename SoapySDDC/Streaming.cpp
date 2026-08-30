@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include "SoapySDDC.hpp"
+#include "../Core/RuntimeTelemetry.h"
 
 #define TAG "SoapySDDC_Streaming"
 
@@ -70,6 +71,16 @@ SoapySDR::Stream *SoapySDDC::setupStream(const int direction,
     samples_block_write = 0;
     samples_block_read  = 0;
     _buf_count = 0;
+    runtimeTelemetry = sddc::runtimeTelemetryEnabled();
+    telemetryStart = std::chrono::steady_clock::now();
+    telemetryCallbackBlocks = 0;
+    telemetryCallbackElements = 0;
+    telemetryReadElements = 0;
+    telemetryOverflowEvents = 0;
+    telemetryTimeoutEvents = 0;
+    if (runtimeTelemetry)
+        SoapySDR_log(SOAPY_SDR_WARNING,
+            "TELEM enabled: Soapy input/read queue report every second");
 
     // allocate buffers
     samples_buffer.resize(numBuffers);
@@ -146,6 +157,9 @@ int SoapySDDC::readStream(SoapySDR::Stream *stream,
 
     size_t returnedElems = std::min(bufferedElems, numElems);
 
+    if (runtimeTelemetry)
+        telemetryReadElements.fetch_add(returnedElems, std::memory_order_relaxed);
+
     // convert into user's buffer for channel 0
     std::memcpy(buffer_channel0, _currentBuff, returnedElems * bytesPerSample);
 
@@ -190,8 +204,11 @@ int SoapySDDC::acquireReadBuffer(SoapySDR::Stream*,
         std::unique_lock<std::mutex> lock(_buf_mutex);
         _buf_cond.wait_for(lock, std::chrono::microseconds(timeoutUs), [this]
                            { return _buf_count != 0; });
-        if (_buf_count == 0)
+        if (_buf_count == 0) {
+            if (runtimeTelemetry)
+                telemetryTimeoutEvents.fetch_add(1, std::memory_order_relaxed);
             return SOAPY_SDR_TIMEOUT;
+        }
     }
     // extract handle and buffer
     handle = samples_block_read;

@@ -3,7 +3,9 @@
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Types.h>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <sys/types.h>
 #include "FX3Class.h"
 #include "RadioHandler.h"
@@ -149,6 +151,14 @@ public:
     size_t bufferedElems;
     size_t _currentHandle;
     bool resetBuffer;
+
+    bool runtimeTelemetry = false;
+    std::chrono::steady_clock::time_point telemetryStart {};
+    uint64_t telemetryCallbackBlocks = 0;
+    uint64_t telemetryCallbackElements = 0;
+    std::atomic<uint64_t> telemetryReadElements {0};
+    std::atomic<uint64_t> telemetryOverflowEvents {0};
+    std::atomic<uint64_t> telemetryTimeoutEvents {0};
 
     int samplerateidx;
 

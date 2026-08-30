@@ -1,4 +1,5 @@
 #include "SoapySDDC.hpp"
+#include "../Core/RuntimeTelemetry.h"
 
 #include <algorithm>
 #include <sys/types.h>
@@ -36,11 +37,48 @@ static void _Callback(void *context, const sddc_complex_t *data, uint32_t len)
 void SoapySDDC::Callback(const sddc_complex_t *data, uint32_t len)
 {
     TraceExtremePrintln(TAG, "%p, %d", data, len);
-    if (_buf_count == numBuffers)
+    const bool overflow = _buf_count == numBuffers;
+    if (overflow)
     {
         _overflowEvent = true;
-        return;
+        if (runtimeTelemetry)
+            telemetryOverflowEvents.fetch_add(1, std::memory_order_relaxed);
     }
+
+    if (runtimeTelemetry) {
+        telemetryCallbackBlocks++;
+        telemetryCallbackElements += len;
+        if ((telemetryCallbackBlocks % sddc::runtimeTelemetryClockSamplePeriod) == 0) {
+            const auto telemetry_now = std::chrono::steady_clock::now();
+            const std::chrono::duration<double> telemetry_elapsed =
+                telemetry_now - telemetryStart;
+            if (telemetry_elapsed.count() >= sddc::runtimeTelemetryReportSeconds) {
+                const uint64_t read_elements =
+                    telemetryReadElements.exchange(0, std::memory_order_relaxed);
+                const uint64_t overflow_events =
+                    telemetryOverflowEvents.exchange(0, std::memory_order_relaxed);
+                const uint64_t timeout_events =
+                    telemetryTimeoutEvents.exchange(0, std::memory_order_relaxed);
+                const double input_msps = telemetryCallbackElements /
+                    telemetry_elapsed.count() / 1000000.0;
+                const double read_msps = read_elements /
+                    telemetry_elapsed.count() / 1000000.0;
+                WarnPrintln(TAG,
+                    "TELEM SOAPY in=%.2fMS/s read=%.2fMS/s queue=%llu/%llu overflow=+%llu timeout=+%llu",
+                    input_msps, read_msps,
+                    static_cast<unsigned long long>(_buf_count.load()),
+                    static_cast<unsigned long long>(numBuffers),
+                    static_cast<unsigned long long>(overflow_events),
+                    static_cast<unsigned long long>(timeout_events));
+                telemetryStart = telemetry_now;
+                telemetryCallbackBlocks = 0;
+                telemetryCallbackElements = 0;
+            }
+        }
+    }
+
+    if (overflow)
+        return;
 
     auto &buff = samples_buffer[samples_block_write];
     buff.resize(len * sizeof(sddc_complex_t));

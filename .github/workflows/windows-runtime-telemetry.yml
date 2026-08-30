@@ -1,0 +1,68 @@
+name: Windows RX888 two-worker runtime telemetry DLL
+
+on:
+  push:
+    branches: [wd/rx888-win-runtime-telemetry]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SoapySDR and optimized static FFTW
+        run: |
+          cd c:\vcpkg
+          git pull
+          vcpkg install soapysdr:x64-windows "fftw3[avx2]:x64-windows-static-md"
+      - run: cmake -E make_directory ${{runner.workspace}}/build64-runtime-telemetry
+      - name: Configure
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-runtime-telemetry
+        run: >-
+          cmake $GITHUB_WORKSPACE
+          "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          "-DFFTW3f_DIR=C:/vcpkg/installed/x64-windows-static-md/share/fftw3f"
+          -DSDDC_USE_PACKAGE_FFTW=ON
+          -DUSE_SIMD_OPTIMIZATIONS=ON
+          -DSDDC_ENABLE_IPO=ON
+          -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          -A x64
+      - name: Build DLL and focused tests
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-runtime-telemetry
+        run: |
+          cmake --build . --config $BUILD_TYPE --target SDDCSupport
+          cmake --build . --config $BUILD_TYPE --target unittest
+      - name: Run focused R2IQ tests
+        timeout-minutes: 3
+        shell: bash
+        working-directory: ${{runner.workspace}}/build64-runtime-telemetry
+        run: ctest -C $BUILD_TYPE -R "CoreFixture_(R2IQTest|R2IQTonePurityTest)" --output-on-failure
+      - name: Verify single-file x64 DLL and record SHA-256
+        shell: pwsh
+        run: |
+          python -m pip install pefile
+          @'
+          import pathlib
+          import pefile
+
+          dll = pathlib.Path(r"${{runner.workspace}}/build64-runtime-telemetry/SoapySDDC/Release/SDDCSupport.dll")
+          pe = pefile.PE(str(dll))
+          if pe.FILE_HEADER.Machine != 0x8664:
+              raise SystemExit(f"Unexpected PE machine: 0x{pe.FILE_HEADER.Machine:04x}")
+          imports = sorted(entry.dll.decode("ascii") for entry in pe.DIRECTORY_ENTRY_IMPORT)
+          print("Imported DLLs:")
+          print("\n".join(imports))
+          fftw_imports = [name for name in imports if "fftw" in name.lower()]
+          if fftw_imports:
+              raise SystemExit(f"Unexpected dynamic FFTW dependency: {fftw_imports}")
+          '@ | python -
+          Get-FileHash "${{runner.workspace}}/build64-runtime-telemetry/SoapySDDC/Release/SDDCSupport.dll" -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SDDCSupport-Windows-x64-two-worker-runtime-telemetry
+          path: ${{runner.workspace}}/build64-runtime-telemetry/SoapySDDC/Release/SDDCSupport.dll
