@@ -21,8 +21,15 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE} " - Version: " ${VERSION} " / 
 option(USE_SIMD_OPTIMIZATIONS "enable SIMD optimizations" ON)
 option(SDDC_ENABLE_IPO "enable interprocedural optimization in Release builds" ON)
 option(SDDC_BUILD_SOAPY_BENCHMARK "build the standalone SoapySDR RX benchmark" OFF)
+option(SDDC_USE_ACCELERATE_FFT
+    "use Apple's Accelerate framework instead of FFTW for SDDC transforms" OFF)
 set(SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR "" CACHE PATH
     "SDR++.app Contents/Frameworks directory used for macOS runtime linkage")
+
+if(SDDC_USE_ACCELERATE_FFT AND
+        (NOT APPLE OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$"))
+    message(FATAL_ERROR "SDDC_USE_ACCELERATE_FFT requires macOS ARM64")
+endif()
 
 # allow enabling address sanitizer - for debug reasons
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -103,13 +110,18 @@ else()
     #add_compile_options(-Wall -Wextra -pedantic)
     include(FindPkgConfig)
     pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
-    pkg_check_modules(LIBFFTW REQUIRED fftw3f)
+    if(NOT SDDC_USE_ACCELERATE_FFT)
+        pkg_check_modules(LIBFFTW REQUIRED fftw3f)
+    endif()
 
     if(APPLE AND SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR)
-        foreach(SDDC_BUNDLE_LIBRARY
-                libSoapySDR.0.8.dylib
-                libfftw3f.3.dylib
-                libusb-1.0.0.dylib)
+        set(SDDC_REQUIRED_BUNDLE_LIBRARIES
+            libSoapySDR.0.8.dylib
+            libusb-1.0.0.dylib)
+        if(NOT SDDC_USE_ACCELERATE_FFT)
+            list(APPEND SDDC_REQUIRED_BUNDLE_LIBRARIES libfftw3f.3.dylib)
+        endif()
+        foreach(SDDC_BUNDLE_LIBRARY IN LISTS SDDC_REQUIRED_BUNDLE_LIBRARIES)
             if(NOT EXISTS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/${SDDC_BUNDLE_LIBRARY}")
                 message(FATAL_ERROR
                     "Missing SDR++ bundle library: ${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/${SDDC_BUNDLE_LIBRARY}")
@@ -121,9 +133,11 @@ else()
         set(LIBUSB_LIBRARY_DIRS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}")
         set(LIBUSB_LIBRARIES
             "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/libusb-1.0.0.dylib")
-        set(LIBFFTW_LIBRARY_DIRS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}")
-        set(LIBFFTW_LIBRARIES
-            "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/libfftw3f.3.dylib")
+        if(NOT SDDC_USE_ACCELERATE_FFT)
+            set(LIBFFTW_LIBRARY_DIRS "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}")
+            set(LIBFFTW_LIBRARIES
+                "${SDDC_MACOS_BUNDLE_FRAMEWORKS_DIR}/libfftw3f.3.dylib")
+        endif()
     endif()
 endif (MSVC)
 

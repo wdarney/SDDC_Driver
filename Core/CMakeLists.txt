@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.13)
 
 file(GLOB SRC "*.cpp" "radio/*.cpp" "pffft/*.cpp" "fft_mt_r2iq/*.cpp" "dsp/*.cpp" "arch/linux/*.c" "arch/linux/*.cpp")
 
+if(SDDC_USE_ACCELERATE_FFT)
+    list(APPEND SRC accelerate_fftw/fftw_accelerate.cpp)
+endif()
+
 if (MSVC)
     # Assume Windows/x86 target ;)
     set_source_files_properties(fft_mt_r2iq/fft_mt_r2iq_impl_avx.cpp PROPERTIES COMPILE_FLAGS /arch:AVX)
@@ -45,9 +49,16 @@ add_library(SDDC_CORE STATIC ${SRC})
 set_target_properties(SDDC_CORE PROPERTIES POSITION_INDEPENDENT_CODE True)
 target_compile_definitions(SDDC_CORE PUBLIC _CRT_SECURE_NO_WARNINGS)
 
-target_include_directories(SDDC_CORE PUBLIC "${LIBFFTW_INCLUDE_DIRS}")
-target_link_directories(SDDC_CORE PUBLIC "${LIBFFTW_LIBRARY_DIRS}")
-target_link_libraries(SDDC_CORE PUBLIC ${LIBFFTW_LIBRARIES})
+if(SDDC_USE_ACCELERATE_FFT)
+    find_library(SDDC_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+    target_include_directories(SDDC_CORE PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/accelerate_fftw")
+    target_link_libraries(SDDC_CORE PUBLIC "${SDDC_ACCELERATE_FRAMEWORK}")
+else()
+    target_include_directories(SDDC_CORE PUBLIC "${LIBFFTW_INCLUDE_DIRS}")
+    target_link_directories(SDDC_CORE PUBLIC "${LIBFFTW_LIBRARY_DIRS}")
+    target_link_libraries(SDDC_CORE PUBLIC ${LIBFFTW_LIBRARIES})
+endif()
 
 target_include_directories(SDDC_CORE PUBLIC "${LIBUSB_INCLUDE_DIRS}")
 target_link_directories(SDDC_CORE PUBLIC "${LIBUSB_LIBRARY_DIRS}")
