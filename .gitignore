@@ -173,6 +173,7 @@ ecf/
 rcf/
 build/
 build64/
+/build-macos-arm64-accelerate-sdrpp-bundle/
 
 # Windows Store app package directories and files
 AppPackages/
