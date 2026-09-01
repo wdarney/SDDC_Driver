@@ -154,6 +154,7 @@ public:
 
     double masterClockRate;
     double configuredSampleRate = 0.0;
+    bool antennaExplicitlySelected = false;
 };
 
 

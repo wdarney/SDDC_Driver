@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <SoapySDR/Types.hpp>
 #include <SoapySDR/Time.hpp>
@@ -61,10 +62,23 @@ SoapySDDC::SoapySDDC(uint8_t dev_index): deviceId(dev_index),
 {
     TracePrintln(TAG, "%d", dev_index);
     vector<SDDC::DeviceItem> devices = RadioHandler::GetDeviceList();
-    radio_handler = new RadioHandler();
-    radio_handler->Init(devices[dev_index]);
-    radio_handler->AttachIQ(_Callback, this);
-    radio_handler->SetDecimation(0);
+    if (dev_index >= devices.size())
+        throw std::runtime_error("SDDC device index is no longer available");
+
+    auto handler = std::make_unique<RadioHandler>();
+    sddc_err_t result = handler->Init(devices[dev_index]);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to initialize SDDC hardware (error " + std::to_string(result) + ")");
+
+    result = handler->AttachIQ(_Callback, this);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to attach SDDC IQ callback (error " + std::to_string(result) + ")");
+
+    result = handler->SetDecimation(0);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to initialize SDDC decimation (error " + std::to_string(result) + ")");
+
+    radio_handler = handler.release();
 }
 
 SoapySDDC::~SoapySDDC(void)
@@ -158,15 +172,23 @@ void SoapySDDC::setAntenna(const int direction, const size_t, const std::string 
 
     if(name == "HF")
     {
-        radio_handler->SetRFMode(HFMODE);
+        sddc_err_t result = radio_handler->SetRFMode(HFMODE);
+        if (result != ERR_SUCCESS)
+            throw std::runtime_error("Failed to switch SDDC hardware to HF mode (error " + std::to_string(result) + ")");
+        antennaExplicitlySelected = true;
         return;
     }
 
     if(name == "VHF")
     {
-        radio_handler->SetRFMode(VHFMODE);
+        sddc_err_t result = radio_handler->SetRFMode(VHFMODE);
+        if (result != ERR_SUCCESS)
+            throw std::runtime_error("Failed to switch SDDC hardware to VHF mode (error " + std::to_string(result) + ")");
+        antennaExplicitlySelected = true;
         return;
     }
+
+    throw std::runtime_error("Unsupported SDDC antenna mode: " + name);
 }
 
 // get the selected antenna
@@ -293,8 +315,16 @@ SoapySDR::Range SoapySDDC::getGainRange(const int, const size_t, const std::stri
 void SoapySDDC::setFrequency(const int, const size_t, const double frequency, const SoapySDR::Kwargs &)
 {
     TracePrintln(TAG, "*, *, %f, *", frequency);
-    radio_handler->SetRFMode(radio_handler->GetBestRFMode(frequency));
-    radio_handler->SetCenterFrequency((uint32_t)frequency);
+    if (!antennaExplicitlySelected)
+    {
+        sddc_err_t result = radio_handler->SetRFMode(radio_handler->GetBestRFMode(frequency));
+        if (result != ERR_SUCCESS)
+            throw std::runtime_error("Failed to select SDDC RF mode for requested frequency (error " + std::to_string(result) + ")");
+    }
+
+    sddc_err_t result = radio_handler->SetCenterFrequency((uint32_t)frequency);
+    if (result != ERR_SUCCESS)
+        throw std::runtime_error("Failed to tune SDDC hardware (error " + std::to_string(result) + ")");
     centerFrequency = radio_handler->GetCenterFrequency();
 }
 
@@ -399,11 +429,11 @@ void SoapySDDC::setSampleRate(const int, const size_t, const double rate)
     const uint8_t decimation = RX888_MKII_DECIMATIONS[rate_index];
     sddc_err_t result = radio_handler->SetADCSampleRate(adc_rate);
     if (result != ERR_SUCCESS)
-        throw std::runtime_error("Failed to set RX888 MkII ADC rate");
+        throw std::runtime_error("Failed to set RX888 MkII ADC rate (error " + std::to_string(result) + ")");
 
     result = radio_handler->SetDecimation(decimation);
     if (result != ERR_SUCCESS)
-        throw std::runtime_error("Failed to configure RX888 MkII R2IQ decimation");
+        throw std::runtime_error("Failed to configure RX888 MkII R2IQ decimation (error " + std::to_string(result) + ")");
 
     // setFreqOffset() is normalized to both the ADC rate and decimation.
     // Recalculate it when applications set frequency before sample rate.
@@ -411,7 +441,7 @@ void SoapySDDC::setSampleRate(const int, const size_t, const double rate)
     {
         result = radio_handler->SetCenterFrequency(static_cast<uint32_t>(centerFrequency));
         if (result != ERR_SUCCESS)
-            throw std::runtime_error("Failed to restore RX888 MkII tuning after sample-rate change");
+            throw std::runtime_error("Failed to restore RX888 MkII tuning after sample-rate change (error " + std::to_string(result) + ")");
     }
 
     configuredSampleRate = rate;
