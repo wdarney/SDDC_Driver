@@ -25,6 +25,19 @@ ctest --test-dir "$build_dir" --output-on-failure
 cmake --install "$build_dir" --config Release
 
 module="$artifact_dir/lib/SoapySDR/modules0.8/libSDDCSupport.so"
+
+# Libraries copied into an SDR++ bundle can retain their original Homebrew
+# install IDs. Normalize the module's references after installation so the
+# bundle-relative rpath remains authoritative on machines without Homebrew.
+otool -L "$module" | tail -n +2 | awk '{print $1}' | while IFS= read -r dependency; do
+    dependency_name=$(basename "$dependency")
+    case "$dependency_name" in
+        libSoapySDR.0.8.dylib|libusb-1.0.0.dylib|libfftw3f.3.dylib)
+            install_name_tool -change "$dependency" "@rpath/$dependency_name" "$module"
+            ;;
+    esac
+done
+
 if otool -L "$module" | grep -q '/opt/homebrew'; then
     echo "ERROR: Homebrew runtime dependency remains in $module" >&2
     exit 1
